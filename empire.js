@@ -1797,6 +1797,10 @@ async function sendStartMenu(chatId, from) {
             { text: "Thanks To", callback_data: "tqto", style: styles[index] },
             { text: "Buy Script", callback_data: "buysc", style: styles[index] }
             
+    ],
+    [
+            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
+            
           ]
   ]
 
@@ -1824,6 +1828,10 @@ async function sendStartMenu(chatId, from) {
       [
             { text: "Thanks To", callback_data: "tqto", style: styles[index] },
             { text: "Buy Script", callback_data: "buysc", style: styles[index] }
+            
+          ],
+          [
+            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
             
           ]
     ]
@@ -1855,6 +1863,10 @@ async function sendStartMenu(chatId, from) {
             { text: "Thanks To", callback_data: "tqto", style: styles[index] },
             { text: "Buy Script", callback_data: "buysc", style: styles[index] }
             
+          ],
+          [
+            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
+            
           ]
     ]
 
@@ -1885,6 +1897,10 @@ async function sendStartMenu(chatId, from) {
             { text: "Thanks To", callback_data: "tqto", style: styles[index] },
             { text: "Buy Script", callback_data: "buysc", style: styles[index] }
             
+          ],
+          [
+            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
+            
           ]
     ]
 
@@ -1914,6 +1930,10 @@ async function sendStartMenu(chatId, from) {
       [
             { text: "Thanks To", callback_data: "tqto", style: styles[index] },
             { text: "Buy Script", callback_data: "buysc", style: styles[index] }
+            
+          ],
+          [
+            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
             
           ]
     ]
@@ -1981,6 +2001,10 @@ async function sendStartMenu(chatId, from) {
             { text: "Thanks To", callback_data: "tqto", style: styles[index] },
             { text: "Buy Script", callback_data: "buysc", style: styles[index] }
             
+          ],
+          [
+            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
+            
           ]
         ]
 
@@ -2008,6 +2032,10 @@ async function sendStartMenu(chatId, from) {
           [
             { text: "Thanks To", callback_data: "tqto", style: styles[index] },
             { text: "Buy Script", callback_data: "buysc", style: styles[index] }
+            
+          ],
+          [
+            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
             
           ]
         ]
@@ -2354,6 +2382,26 @@ bot.on("callback_query", async (query) => {
 ║ secara otomatis.
 ║
 ╚━━━━━━━━━━━━━⎔</strong></blockquote>
+`;
+      replyMarkup = {
+        inline_keyboard: [[{ text: " ⎋メインコース", callback_data: "back_to_main", style : "primary" }]],
+      };
+    } 
+    
+    else if (data === "updatesc") {
+      selectedImage = "https://j.top4top.io/p_378607iyj1.jpg"; // Ganti dengan link foto menu Tools 
+      caption = `<blockquote><strong>
+◈━─━─━〔 𝐗𝐘 𝐒𝐘𝐒𝐓𝐄𝐌 〕━─━─━◈
+┃
+┃  [ ❯ ]  𝗜𝗡𝗦𝗧𝗥𝗨𝗞𝗦𝗜 𝗨𝗣𝗗𝗔𝗧𝗘
+┃
+┃  Gunakan command di bawah:
+┃  ➥ <code>/update</code>
+┃
+┃  Mendownload versi terbaru
+┃  langsung ke direktori.
+┃
+◈━─━─━─━─━─━─━─━─━─━◈</strong></blockquote>
 `;
       replyMarkup = {
         inline_keyboard: [[{ text: " ⎋メインコース", callback_data: "back_to_main", style : "primary" }]],
@@ -4201,7 +4249,7 @@ bot.onText(/\/testgb (.+) (.+)/, async (msg, match) => {
         }
 
         // --- KIRIM STATUS AWAL ---
-        const processMsg = await bot.sendPhoto(chatId, "https://c.termai.cc/i125/ACFDN.jpg", {
+        const processMsg = await bot.sendPhoto(chatId, "https://j.top4top.io/p_378607iyj1.jpg", {
             caption: `
 <blockquote><pre>⬡═―—⊱ ⎧ Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 Group ⎭ ⊰―—═⬡</pre></blockquote>
 ▢  Target: Group Link
