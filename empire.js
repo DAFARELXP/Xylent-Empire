@@ -2541,6 +2541,7 @@ bot.on("callback_query", async (query) => {
 │/Ovalium - 628xx
 │/Slowness - 628xx
 │/Zombiee - 628xx
+│/Puki - 628xx
 ┗━━━━━━━━━━━━━━━⬡
 `;
       replyMarkup = {
