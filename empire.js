@@ -4380,18 +4380,17 @@ bot.onText(/\/updatesc/, async (msg) => {
 });
 
 const CONFIG = {
-  OWNER_ID      : 8768626313,                   // Telegram user ID owner
-  RAW_URL       : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
-  COMMITS_API   : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
-  LOCAL_FILE    : path.join(__dirname, "empire.js"), // path simpan file hasil update
-  INTERVAL_MIN  : 5,                           // cek setiap X menit
+  OWNER_ID     : 8768626313,
+  RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
+  COMMITS_API  : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
+  LOCAL_FILE   : path.join(__dirname, "empire.js"),
+  INTERVAL_MIN : 5,
 };
 
 let autoUpdateEnabled = false;
 let checkIntervalID   = null;
 let lastKnownSHA      = null;
 
-// ── HELPER: HTTP GET ──────────────────────────────────────────
 function httpGet(url) {
   return new Promise((resolve, reject) => {
     https.get(url, { headers: { "User-Agent": "XylentEmpireBot" } }, (res) => {
@@ -4402,7 +4401,6 @@ function httpGet(url) {
   });
 }
 
-// ── AMBIL SHA COMMIT TERBARU ──────────────────────────────────
 async function getLatestSHA() {
   const { body } = await httpGet(CONFIG.COMMITS_API);
   const commits  = JSON.parse(body);
@@ -4410,68 +4408,61 @@ async function getLatestSHA() {
   return commits[0].sha;
 }
 
-// ── DOWNLOAD FILE TERBARU ─────────────────────────────────────
 async function downloadFile() {
   const { status, body } = await httpGet(CONFIG.RAW_URL);
   if (status !== 200) throw new Error(`HTTP ${status}`);
   fs.writeFileSync(CONFIG.LOCAL_FILE, body, "utf-8");
 }
 
-// ── CEK & PROSES UPDATE ───────────────────────────────────────
 async function checkUpdate(chatId = null) {
   try {
     const sha     = await getLatestSHA();
     const isFirst = lastKnownSHA === null;
 
     if (sha === lastKnownSHA) {
-      // Tidak ada update
       if (chatId) {
         bot.sendMessage(chatId,
-          `✅ Tidak ada update baru`,
-          { parse_mode: "Markdown" }
+          `<blockquote>✅ <b>Tidak ada update baru.</b>\n\n` +
+          `Sistem sudah menggunakan versi terbaru.\n\n` +
+          `<i>Xylent Empire Auto-Update System</i></blockquote>`,
+          { parse_mode: "HTML" }
         );
       }
       return;
     }
 
-    // Ada update baru (atau pertama kali)
-    const prevSHA   = lastKnownSHA;
-    lastKnownSHA    = sha;
+    const prevSHA  = lastKnownSHA;
+    lastKnownSHA   = sha;
 
     if (!isFirst) {
-      // Download file baru
       await downloadFile();
 
       const msg =
-  `<blockquote>🚀 *Auto-Update Berhasil!*\n\n` +
-  `Pembaruan terbaru dari owner telah berhasil\n` +
-  `diunduh dan diterapkan ke dalam sistem.\n\n` +
-  `┌─────────────────────────\n` +
-  `│ 📦 File     : \`empire.js\`\n` +
-  `│ ⏰ Waktu    : ${new Date().toLocaleString("id-ID")}\n` +
-  `└─────────────────────────\n\n` +
-  `⚙️ Sistem sedang mempersiapkan restart...\n` +
-  `♻️ Bot akan kembali online dalam 3 detik\n\n` +
-  `Pembaruan ini dilakukan secara otomatis\n` +
-  `oleh Xylent Empire Auto-Update System.\n` +
-  `Semua fitur terbaru kini telah tersedia.</blockquote>`;
+        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
+        `Pembaruan terbaru dari owner telah berhasil\n` +
+        `diunduh dan diterapkan ke dalam sistem.\n\n` +
+        `┌─────────────────────────\n` +
+        `│ 📦 File  : <code>empire.js</code>\n` +
+        `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
+        `└─────────────────────────\n\n` +
+        `⚙️ Sistem sedang mempersiapkan restart...\n` +
+        `♻️ Bot akan kembali online dalam <b>3 detik</b>\n\n` +
+        `<i>Pembaruan ini dilakukan secara otomatis\n` +
+        `oleh Xylent Empire Auto-Update System.\n` +
+        `Semua fitur terbaru kini telah tersedia.</i></blockquote>`;
 
-      // Kirim ke owner
       bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
-
-      // Kalau cek manual dari chat lain
       if (chatId && chatId !== CONFIG.OWNER_ID) {
-        bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
+        bot.sendMessage(chatId, msg, { parse_mode: "HTML" });
       }
 
     } else {
-      // Pertama kali: set baseline SHA saja
-      console.log(`[AutoUpdate] Terhubung Sistem siap memantau pembaruan terbaru.`);
+      console.log(`[AutoUpdate] Terhubung. Sistem siap memantau pembaruan terbaru.`);
       if (chatId) {
         bot.sendMessage(chatId,
-          `<blockquote>✅ *Sistem Siap!*\n\n` +
-          `siap memantau pembaruan terbaru dari owner.\n\n` +
-          `Xylent Empire Auto-Update System<blockquote>`,
+          `<blockquote>✅ <b>Sistem Siap!</b>\n\n` +
+          `Siap memantau pembaruan terbaru dari owner.\n\n` +
+          `<i>Xylent Empire Auto-Update System</i></blockquote>`,
           { parse_mode: "HTML" }
         );
       }
@@ -4479,32 +4470,30 @@ async function checkUpdate(chatId = null) {
 
   } catch (err) {
     console.error("[AutoUpdate] Error:", err.message);
-    const errMsg = `❌ *Gagal cek update:*\n\`${err.message}\``;
-    bot.sendMessage(CONFIG.OWNER_ID, errMsg, { parse_mode: "Markdown" });
+    const errMsg =
+      `<blockquote>❌ <b>Gagal cek update:</b>\n` +
+      `<code>${err.message}</code></blockquote>`;
+    bot.sendMessage(CONFIG.OWNER_ID, errMsg, { parse_mode: "HTML" });
     if (chatId && chatId !== CONFIG.OWNER_ID) {
-      bot.sendMessage(chatId, errMsg, { parse_mode: "Markdown" });
+      bot.sendMessage(chatId, errMsg, { parse_mode: "HTML" });
     }
   }
 }
 
-// ── AKTIFKAN AUTO-UPDATE ──────────────────────────────────────
 async function startAutoUpdate(chatId) {
   if (autoUpdateEnabled) {
     return bot.sendMessage(chatId,
-      `<blockquote>⚠️ Auto-Update sudah berjalan!</b>\n\n` +
+      `<blockquote>⚠️ <b>Auto-Update sudah berjalan!</b>\n\n` +
       `Sistem pemantau pembaruan sudah aktif\n` +
       `dan sedang berjalan di latar belakang.\n\n` +
-      `Gunakan /updatestatus untuk melihat status.<blockquote>`,
+      `Gunakan /updatestatus untuk melihat status.</blockquote>`,
       { parse_mode: "HTML" }
     );
   }
 
   autoUpdateEnabled = true;
-
-  // Set baseline dulu
   await checkUpdate(null);
 
-  // Mulai interval
   const ms        = CONFIG.INTERVAL_MIN * 60 * 1000;
   checkIntervalID = setInterval(() => checkUpdate(null), ms);
 
@@ -4526,10 +4515,13 @@ async function startAutoUpdate(chatId) {
   );
 }
 
-// ── MATIKAN AUTO-UPDATE ───────────────────────────────────────
 function stopAutoUpdate(chatId) {
   if (!autoUpdateEnabled) {
-    return bot.sendMessage(chatId, "⚠️ Auto-Update sudah *mati*.", { parse_mode: "Markdown" });
+    return bot.sendMessage(chatId,
+      `<blockquote>⚠️ <b>Auto-Update sudah mati.</b>\n\n` +
+      `Gunakan /autoupdate on untuk mengaktifkan kembali.</blockquote>`,
+      { parse_mode: "HTML" }
+    );
   }
 
   clearInterval(checkIntervalID);
@@ -4537,37 +4529,34 @@ function stopAutoUpdate(chatId) {
   autoUpdateEnabled = false;
 
   bot.sendMessage(chatId,
-  `<blockquote>Auto-Update Dimatikan!\n\n` +
-  `Sistem pemantau pembaruan telah dihentikan\n` +
-  `dan tidak akan mengecek perubahan apapun\n` +
-  `sampai diaktifkan kembali.\n\n` +
-  `┌─────────────────────────\n` +
-  `│ 📦 File     : \`empire.js\`\n` +
-  `│ ⏰ Mati     : ${new Date().toLocaleString("id-ID")}\n` +
-  `└─────────────────────────\n\n` +
-  `⚠️ Selama auto-update mati, sistem tidak\n` +
-  `akan mendeteksi pembaruan terbaru dari owner.\n` +
-  `Gunakan /checkupdate untuk cek manual,\n` +
-  `atau /autoupdate on untuk mengaktifkan kembali.\n\n` +
-  `Xylent Empire Auto-Update System — Nonaktif</blockquote>`,
-  { parse_mode: "HTML" }
-);
+    `<blockquote>🔴 <b>Auto-Update Dimatikan!</b>\n\n` +
+    `Sistem pemantau pembaruan telah dihentikan\n` +
+    `dan tidak akan mengecek perubahan apapun\n` +
+    `sampai diaktifkan kembali.\n\n` +
+    `┌─────────────────────────\n` +
+    `│ 📦 File  : <code>empire.js</code>\n` +
+    `│ ⏰ Mati  : ${new Date().toLocaleString("id-ID")}\n` +
+    `└─────────────────────────\n\n` +
+    `⚠️ Selama auto-update mati, sistem tidak\n` +
+    `akan mendeteksi pembaruan terbaru dari owner.\n` +
+    `Gunakan /checkupdate untuk cek manual,\n` +
+    `atau /autoupdate on untuk mengaktifkan kembali.\n\n` +
+    `<i>Xylent Empire Auto-Update System — Nonaktif</i></blockquote>`,
+    { parse_mode: "HTML" }
+  );
 }
 
-// ── MIDDLEWARE OWNER ONLY ─────────────────────────────────────
 function ownerOnly(msg) {
   if (!msg.from || msg.from.id !== CONFIG.OWNER_ID) {
-    bot.sendMessage(msg.chat.id, "⛔ Perintah ini hanya untuk *owner*.", { parse_mode: "Markdown" });
+    bot.sendMessage(msg.chat.id,
+      `<blockquote>⛔ Perintah ini hanya untuk <b>owner</b>.</blockquote>`,
+      { parse_mode: "HTML" }
+    );
     return false;
   }
   return true;
 }
 
-// ================================================================
-//  COMMANDS
-// ================================================================
-
-// /autoupdate on|off
 bot.onText(/\/autoupdate (on|off)/i, async (msg, match) => {
   if (!ownerOnly(msg)) return;
   const action = match[1].toLowerCase();
@@ -4575,28 +4564,30 @@ bot.onText(/\/autoupdate (on|off)/i, async (msg, match) => {
   else stopAutoUpdate(msg.chat.id);
 });
 
-// /checkupdate — cek manual sekarang
 bot.onText(/\/checkupdate/, async (msg) => {
   if (!ownerOnly(msg)) return;
-  bot.sendMessage(msg.chat.id, "🔍 Mengecek update dari GitHub...");
+  bot.sendMessage(msg.chat.id,
+    `<blockquote>🔍 <b>Memeriksa Pembaruan...</b>\n\n` +
+    `Sistem sedang menghubungi GitHub Repository.\n` +
+    `Mohon tunggu sebentar...</blockquote>`,
+    { parse_mode: "HTML" }
+  );
   await checkUpdate(msg.chat.id);
 });
 
-// /updatestatus — lihat status lengkap
 bot.onText(/\/updatestatus/, (msg) => {
   if (!ownerOnly(msg)) return;
   bot.sendMessage(msg.chat.id,
-  `<blockquote>📊 *Status Auto-Update*\n\n` +
-  `┌─────────────────────────\n` +
-  `│ 🔌 Status   : ${autoUpdateEnabled ? "🟢 AKTIF" : "🔴 MATI"}\n` +
-  `│ ⏱ Interval : ${CONFIG.INTERVAL_MIN} menit\n` +
-  `│ 📦 File     : \`empire.js\`\n` +
-  `└─────────────────────────\n\n` +
-  `Xylent Empire Auto-Update System</blockquote>`,
-  { parse_mode: "HTML" }
-);
+    `<blockquote>📊 <b>Status Auto-Update</b>\n\n` +
+    `┌─────────────────────────\n` +
+    `│ 🔌 Status   : ${autoUpdateEnabled ? "🟢 AKTIF" : "🔴 MATI"}\n` +
+    `│ ⏱ Interval : ${CONFIG.INTERVAL_MIN} menit\n` +
+    `│ 📦 File     : <code>empire.js</code>\n` +
+    `└─────────────────────────\n\n` +
+    `<i>Xylent Empire Auto-Update System</i></blockquote>`,
+    { parse_mode: "HTML" }
+  );
 });
-
 
 bot.onText(/^\/brat(?: (.+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
