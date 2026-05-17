@@ -2541,7 +2541,6 @@ bot.on("callback_query", async (query) => {
 │/Ovalium - 628xx
 │/Slowness - 628xx
 │/Zombiee - 628xx
-│/Puki - 628xx
 ┗━━━━━━━━━━━━━━━⬡
 `;
       replyMarkup = {
@@ -4449,26 +4448,15 @@ async function checkUpdate(chatId = null) {
     lastKnownSHA   = sha;
 
     if (!isFirst) {
-      await downloadFile();
+  await downloadFile();
 
-      const msg =
-        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
-        `Pembaruan terbaru dari owner telah berhasil\n` +
-        `diunduh dan diterapkan ke dalam sistem.\n\n` +
-        `┌─────────────────────────\n` +
-        `│ 📦 File  : <code>empire.js</code>\n` +
-        `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
-        `└─────────────────────────\n\n` +
-        `⚙️ Sistem sedang mempersiapkan restart...\n` +
-        `♻️ Bot akan kembali online dalam <b>3 detik</b>\n\n` +
-        `<i>Pembaruan ini dilakukan secara otomatis\n` +
-        `oleh Xylent Empire Auto-Update System.\n` +
-        `Semua fitur terbaru kini telah tersedia.</i></blockquote>`;
+  const msg = `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n...dst</blockquote>`;
 
-      bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
-      if (chatId && chatId !== CONFIG.OWNER_ID) {
-        bot.sendMessage(chatId, msg, { parse_mode: "HTML" });
-      }
+  bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
+
+  // Restart otomatis
+  setTimeout(() => { process.exit(); }, 3000);
+
 
     } else {
       console.log(`[AutoUpdate] Terhubung. Sistem siap memantau pembaruan terbaru.`);
