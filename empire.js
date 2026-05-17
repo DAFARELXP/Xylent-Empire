@@ -4450,7 +4450,7 @@ async function checkUpdate(chatId = null) {
     if (!isFirst) {
   await downloadFile();
 
-  const msg = `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n...dst</blockquote>`;
+  const msg = `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n</blockquote>`;
 
   bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
 
