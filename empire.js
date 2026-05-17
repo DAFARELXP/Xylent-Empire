@@ -4410,9 +4410,22 @@ async function getLatestSHA() {
 }
 
 async function downloadFile() {
-  const { status, body } = await httpGet(CONFIG.RAW_URL);
-  if (status !== 200) throw new Error(`HTTP ${status}`);
-  fs.writeFileSync(CONFIG.LOCAL_FILE, body, "utf-8");
+  const axios = require('axios');
+  const response = await axios.get(CONFIG.RAW_URL, { timeout: 10000 });
+  const newData = response.data;
+
+  if (!newData || typeof newData !== 'string') {
+    throw new Error("File dari server kosong atau tidak valid.");
+  }
+
+  // Backup dulu
+  if (fs.existsSync(CONFIG.LOCAL_FILE)) {
+    fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
+  }
+
+  // Tulis file baru
+  fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
+  console.log(`[AutoUpdate] File berhasil ditulis ke: ${CONFIG.LOCAL_FILE}`);
 }
 
 async function checkUpdate(chatId = null) {
