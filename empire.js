@@ -4584,6 +4584,56 @@ bot.onText(/\/updatestatus/, (msg) => {
   );
 });
 
+// Taruh di paling bawah script setelah semua bot.onText
+bot.getMe().then(async (me) => {
+  console.log(`[Bot] Online! @${me.username}`);
+
+  try {
+    const axios = require('axios');
+    const response = await axios.get(CONFIG.RAW_URL, {
+      timeout: 10000,
+      headers: { "User-Agent": "XylentEmpireBot" },
+      responseType: 'text'
+    });
+
+    const newData = response.data;
+    const currentData = fs.existsSync(CONFIG.LOCAL_FILE)
+      ? fs.readFileSync(CONFIG.LOCAL_FILE, 'utf-8')
+      : null;
+
+    if (!currentData || newData === currentData) {
+      lastKnownContent = newData;
+      console.log(`[AutoUpdate] File sudah terbaru.`);
+      bot.sendMessage(CONFIG.OWNER_ID,
+        `<blockquote>✅ <b>Bot Online!</b>\n\n` +
+        `File <code>empire.js</code> sudah versi terbaru.\n\n` +
+        `<i>Xylent Empire Auto-Update System</i></blockquote>`,
+        { parse_mode: "HTML" }
+      );
+    } else {
+      lastKnownContent = newData;
+      fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
+      fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
+      console.log(`[AutoUpdate] Update ditemukan saat startup!`);
+      bot.sendMessage(CONFIG.OWNER_ID,
+        `<blockquote>🚀 <b>Update Ditemukan Saat Startup!</b>\n\n` +
+        `File terbaru dari GitHub langsung diterapkan.\n\n` +
+        `┌─────────────────────────\n` +
+        `│ 📦 File  : <code>empire.js</code>\n` +
+        `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
+        `└─────────────────────────\n\n` +
+        `♻️ Bot restart dalam <b>3 detik</b>\n\n` +
+        `<i>Xylent Empire Auto-Update System</i></blockquote>`,
+        { parse_mode: "HTML" }
+      );
+      setTimeout(() => { process.exit(); }, 3000);
+    }
+
+  } catch (e) {
+    console.error("[AutoUpdate] Gagal cek saat startup:", e.message);
+  }
+});
+
 bot.onText(/^\/brat(?: (.+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
   const argsRaw = match[1];
