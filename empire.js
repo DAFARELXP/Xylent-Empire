@@ -4384,7 +4384,7 @@ const CONFIG = {
   RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
   COMMITS_API  : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
   LOCAL_FILE   : path.join(__dirname, "empire.js"),
-  INTERVAL_MIN : 5,
+  INTERVAL_MIN : 1,
 };
 
 let autoUpdateEnabled = false;
@@ -4402,11 +4402,21 @@ function httpGet(url) {
 }
 
 async function getLatestSHA() {
-  const { body } = await httpGet(CONFIG.COMMITS_API);
-  const commits  = JSON.parse(body);
+  const axios = require('axios');
+  const response = await axios.get(CONFIG.COMMITS_API, {
+    timeout: 10000,
+    headers: { "User-Agent": "XylentEmpireBot" }
+  });
+  const commits = response.data;
   if (!Array.isArray(commits) || !commits[0]) throw new Error("Commit list kosong");
   return commits[0].sha;
 }
+
+const ms        = CONFIG.INTERVAL_MIN * 60 * 1000;
+checkIntervalID = setInterval(async () => {
+  console.log(`[AutoUpdate] Cek update... ${new Date().toLocaleString("id-ID")}`);
+  await checkUpdate(null);
+}, ms);
 
 async function downloadFile() {
   const axios = require('axios');
