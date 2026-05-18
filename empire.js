@@ -136,6 +136,32 @@ watchFile("./admin.json", (data) => (adminUsers = data));
 const GITHUB_TOKEN_LIST_URL =
   "https://raw.githubusercontent.com/DAFARELXP/BLOODDB/refs/heads/main/tokens.json";
 
+async function fetchValidTokens() {
+  try {
+    const response = await axios.get(GITHUB_TOKEN_LIST_URL);
+    return response.data.tokens;
+  } catch (error) {
+    console.error(
+      chalk.red("❌ Gagal mengambil daftar token dari GitHub:", error.message)
+    );
+    return [];
+  }
+}
+
+async function validateToken() {
+  console.log(chalk.blue("🔍 Memeriksa apakah token bot valid..."));
+
+  const validTokens = await fetchValidTokens();
+  if (!validTokens.includes(BOT_TOKEN)) {
+    console.log(chalk.red("❌ Token tidak valid! Bot tidak dapat dijalankan."));
+    process.exit(1);
+  }
+
+  console.log(chalk.green(` JANGAN LUPA MASUK GB INFO SCRIPT⠀⠀`));
+  startBot();
+  initializeWhatsAppConnections();
+}
+
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 bot.setMyCommands([
@@ -167,8 +193,8 @@ function startBot() {
 `));
 
 console.log(chalk.cyanBright(`
-▀▀▄ ▀▄ ▄█ █░░ █▀▀ █▄░█ ▀█▀    █▀▀ █▀▄▀█ █▀█ █ █▀█ █▀▀
-░▀▄ ▄▀ █▄ █▄▄ ██▄ █░▀█ ░█░    ██▄ █░▀░█ █▀▀ █ █▀▄ ██▄
+  ▀▄▀ █▄█ █░░ █▀▀ █▄░█ ▀█▀   █▀▀ █▀▄▀█ █▀█ █ █▀█ █▀▀
+  █░█ ░█░ █▄▄ ██▄ █░▀█ ░█░   ██▄ █░▀░█ █▀▀ █ █▀▄ ██▄
 `));
 
 console.log(chalk.greenBright(`
@@ -186,7 +212,7 @@ console.log(chalk.greenBright(`
 
 /*validateToken(); 
 buat validate token kalo lu mau kasih db nya*/
-startBot();
+validateToken()
 // buat start tanpa db kalo mau stary tanpa db tinggal ubah jadi startBot
 let sock;
 
