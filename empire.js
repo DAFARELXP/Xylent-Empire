@@ -4385,6 +4385,7 @@ const CONFIG = {
   COMMITS_API  : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
   LOCAL_FILE   : path.join(__dirname, "empire.js"),
   INTERVAL_MIN : 1,
+  GITHUB_TOKEN : "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", // ← isi token GitHub kamu
 };
 
 let autoUpdateEnabled = false;
@@ -4405,36 +4406,32 @@ async function getLatestSHA() {
   const axios = require('axios');
   const response = await axios.get(CONFIG.COMMITS_API, {
     timeout: 10000,
-    headers: { "User-Agent": "XylentEmpireBot" }
+    headers: {
+      "User-Agent": "XylentEmpireBot",
+      "Authorization": `Bearer ${CONFIG.GITHUB_TOKEN}`,
+    }
   });
   const commits = response.data;
   if (!Array.isArray(commits) || !commits[0]) throw new Error("Commit list kosong");
   return commits[0].sha;
 }
 
-const ms        = CONFIG.INTERVAL_MIN * 60 * 1000;
-checkIntervalID = setInterval(async () => {
-  console.log(`[AutoUpdate] Cek update... ${new Date().toLocaleString("id-ID")}`);
-  await checkUpdate(null);
-}, ms);
-
 async function downloadFile() {
   const axios = require('axios');
-  const response = await axios.get(CONFIG.RAW_URL, { timeout: 10000 });
+  const response = await axios.get(CONFIG.RAW_URL, {
+    timeout: 10000,
+    headers: {
+      "User-Agent": "XylentEmpireBot",
+      "Authorization": `Bearer ${CONFIG.GITHUB_TOKEN}`,
+    }
+  });
   const newData = response.data;
-
-  if (!newData || typeof newData !== 'string') {
-    throw new Error("File dari server kosong atau tidak valid.");
-  }
-
-  // Backup dulu
+  if (!newData || typeof newData !== 'string') throw new Error("File kosong atau tidak valid.");
   if (fs.existsSync(CONFIG.LOCAL_FILE)) {
     fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
   }
-
-  // Tulis file baru
   fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
-  console.log(`[AutoUpdate] File berhasil ditulis ke: ${CONFIG.LOCAL_FILE}`);
+  console.log(`[AutoUpdate] File berhasil ditulis.`);
 }
 
 async function checkUpdate(chatId = null) {
