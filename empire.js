@@ -4404,16 +4404,21 @@ function httpGet(url) {
 
 async function getLatestSHA() {
   const axios = require('axios');
-  const response = await axios.get(CONFIG.COMMITS_API, {
-    timeout: 10000,
-    headers: {
-      "User-Agent": "XylentEmpireBot",
-      "Authorization": `Bearer ${CONFIG.GITHUB_TOKEN}`,
+  // Coba pakai etag endpoint yang lebih ringan
+  const response = await axios.get(
+    `https://api.github.com/repos/DAFARELXP/Xylent-Empire/git/refs/heads/main`,
+    {
+      timeout: 10000,
+      headers: {
+        "User-Agent": "XylentEmpireBot",
+        "Authorization": `Bearer ${CONFIG.GITHUB_TOKEN}`,
+      }
     }
-  });
-  const commits = response.data;
-  if (!Array.isArray(commits) || !commits[0]) throw new Error("Commit list kosong");
-  return commits[0].sha;
+  );
+  const data = response.data;
+  const sha = Array.isArray(data) ? data[0]?.object?.sha : data?.object?.sha;
+  if (!sha) throw new Error("SHA tidak ditemukan");
+  return sha;
 }
 
 async function downloadFile() {
@@ -4436,10 +4441,25 @@ async function downloadFile() {
 
 async function checkUpdate(chatId = null) {
   try {
-    const sha     = await getLatestSHA();
-    const isFirst = lastKnownSHA === null;
+    const axios = require('axios');
 
-    if (sha === lastKnownSHA) {
+    // Ambil langsung isi file dari raw GitHub
+    const response = await axios.get(CONFIG.RAW_URL, {
+      timeout: 10000,
+      headers: { "User-Agent": "XylentEmpireBot" }
+    });
+
+    const newData = response.data;
+    if (!newData || typeof newData !== 'string') throw new Error("File kosong");
+
+    // Baca file lokal
+    const currentData = fs.existsSync(CONFIG.LOCAL_FILE) 
+      ? fs.readFileSync(CONFIG.LOCAL_FILE, 'utf-8') 
+      : null;
+
+    const isFirst = currentData === null;
+
+    if (currentData === newData) {
       if (chatId) {
         bot.sendMessage(chatId,
           `<blockquote>✅ <b>Tidak ada update baru.</b>\n\n` +
@@ -4451,22 +4471,33 @@ async function checkUpdate(chatId = null) {
       return;
     }
 
-    const prevSHA  = lastKnownSHA;
-    lastKnownSHA   = sha;
-
     if (!isFirst) {
-  await downloadFile();
+      // Backup & tulis file baru
+      fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
+      fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
+      console.log(`[AutoUpdate] File berhasil diperbarui.`);
 
-  const msg = `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n</blockquote>`;
+      const msg =
+        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
+        `Pembaruan terbaru dari owner telah berhasil\n` +
+        `diunduh dan diterapkan ke dalam sistem.\n\n` +
+        `┌─────────────────────────\n` +
+        `│ 📦 File  : <code>empire.js</code>\n` +
+        `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
+        `└─────────────────────────\n\n` +
+        `⚙️ Sistem sedang mempersiapkan restart...\n` +
+        `♻️ Bot akan kembali online dalam <b>3 detik</b>\n\n` +
+        `<i>Xylent Empire Auto-Update System</i></blockquote>`;
 
-  bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
+      bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
+      if (chatId && chatId !== CONFIG.OWNER_ID) {
+        bot.sendMessage(chatId, msg, { parse_mode: "HTML" });
+      }
 
-  // Restart otomatis
-  setTimeout(() => { process.exit(); }, 3000);
-
+      setTimeout(() => { process.exit(); }, 3000);
 
     } else {
-      console.log(`[AutoUpdate] Terhubung. Sistem siap memantau pembaruan terbaru.`);
+      console.log(`[AutoUpdate] Baseline tersimpan. Memantau perubahan...`);
       if (chatId) {
         bot.sendMessage(chatId,
           `<blockquote>✅ <b>Sistem Siap!</b>\n\n` +
