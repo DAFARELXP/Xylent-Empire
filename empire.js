@@ -4382,84 +4382,37 @@ bot.onText(/\/updatesc/, async (msg) => {
 const CONFIG = {
   OWNER_ID     : 8768626313,
   RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
-  COMMITS_API  : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
   LOCAL_FILE   : path.join(__dirname, "empire.js"),
   INTERVAL_MIN : 1,
-  GITHUB_TOKEN : "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", // ← isi token GitHub kamu
 };
 
 let autoUpdateEnabled = false;
 let checkIntervalID   = null;
-let lastKnownSHA      = null;
+let lastKnownContent  = null;  // baseline isi file
 
-function httpGet(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { "User-Agent": "XylentEmpireBot" } }, (res) => {
-      let body = "";
-      res.on("data", (chunk) => (body += chunk));
-      res.on("end", () => resolve({ status: res.statusCode, body }));
-    }).on("error", reject);
-  });
-}
-
-async function getLatestSHA() {
-  const axios = require('axios');
-  // Coba pakai etag endpoint yang lebih ringan
-  const response = await axios.get(
-    `https://api.github.com/repos/DAFARELXP/Xylent-Empire/git/refs/heads/main`,
-    {
-      timeout: 10000,
-      headers: {
-        "User-Agent": "XylentEmpireBot",
-        "Authorization": `Bearer ${CONFIG.GITHUB_TOKEN}`,
-      }
-    }
-  );
-  const data = response.data;
-  const sha = Array.isArray(data) ? data[0]?.object?.sha : data?.object?.sha;
-  if (!sha) throw new Error("SHA tidak ditemukan");
-  return sha;
-}
-
-async function downloadFile() {
-  const axios = require('axios');
-  const response = await axios.get(CONFIG.RAW_URL, {
-    timeout: 10000,
-    headers: {
-      "User-Agent": "XylentEmpireBot",
-      "Authorization": `Bearer ${CONFIG.GITHUB_TOKEN}`,
-    }
-  });
-  const newData = response.data;
-  if (!newData || typeof newData !== 'string') throw new Error("File kosong atau tidak valid.");
-  if (fs.existsSync(CONFIG.LOCAL_FILE)) {
-    fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
-  }
-  fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
-  console.log(`[AutoUpdate] File berhasil ditulis.`);
-}
-
+// ── CEK & PROSES UPDATE ───────────────────────────────────────
 async function checkUpdate(chatId = null) {
   try {
     const axios = require('axios');
-
-    // Ambil langsung isi file dari raw GitHub
     const response = await axios.get(CONFIG.RAW_URL, {
       timeout: 10000,
-      headers: { "User-Agent": "XylentEmpireBot" }
+      headers: { "User-Agent": "XylentEmpireBot" },
+      responseType: 'text'
     });
 
     const newData = response.data;
     if (!newData || typeof newData !== 'string') throw new Error("File kosong");
 
-    // Baca file lokal
-    const currentData = fs.existsSync(CONFIG.LOCAL_FILE) 
-      ? fs.readFileSync(CONFIG.LOCAL_FILE, 'utf-8') 
-      : null;
+    // Belum ada baseline — simpan dulu, jangan download
+    if (lastKnownContent === null) {
+      lastKnownContent = newData;
+      console.log(`[AutoUpdate] Baseline tersimpan.`);
+      return;
+    }
 
-    const isFirst = currentData === null;
-
-    if (currentData === newData) {
+    // Tidak ada perubahan
+    if (newData === lastKnownContent) {
+      console.log(`[AutoUpdate] Tidak ada update.`);
       if (chatId) {
         bot.sendMessage(chatId,
           `<blockquote>✅ <b>Tidak ada update baru.</b>\n\n` +
@@ -4471,42 +4424,32 @@ async function checkUpdate(chatId = null) {
       return;
     }
 
-    if (!isFirst) {
-      // Backup & tulis file baru
+    // Ada perubahan — update!
+    lastKnownContent = newData;
+    if (fs.existsSync(CONFIG.LOCAL_FILE)) {
       fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
-      fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
-      console.log(`[AutoUpdate] File berhasil diperbarui.`);
-
-      const msg =
-        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
-        `Pembaruan terbaru dari owner telah berhasil\n` +
-        `diunduh dan diterapkan ke dalam sistem.\n\n` +
-        `┌─────────────────────────\n` +
-        `│ 📦 File  : <code>empire.js</code>\n` +
-        `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
-        `└─────────────────────────\n\n` +
-        `⚙️ Sistem sedang mempersiapkan restart...\n` +
-        `♻️ Bot akan kembali online dalam <b>3 detik</b>\n\n` +
-        `<i>Xylent Empire Auto-Update System</i></blockquote>`;
-
-      bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
-      if (chatId && chatId !== CONFIG.OWNER_ID) {
-        bot.sendMessage(chatId, msg, { parse_mode: "HTML" });
-      }
-
-      setTimeout(() => { process.exit(); }, 3000);
-
-    } else {
-      console.log(`[AutoUpdate] Baseline tersimpan. Memantau perubahan...`);
-      if (chatId) {
-        bot.sendMessage(chatId,
-          `<blockquote>✅ <b>Sistem Siap!</b>\n\n` +
-          `Siap memantau pembaruan terbaru dari owner.\n\n` +
-          `<i>Xylent Empire Auto-Update System</i></blockquote>`,
-          { parse_mode: "HTML" }
-        );
-      }
     }
+    fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
+    console.log(`[AutoUpdate] File berhasil diperbarui!`);
+
+    const msg =
+      `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
+      `Pembaruan terbaru dari owner telah berhasil\n` +
+      `diunduh dan diterapkan ke dalam sistem.\n\n` +
+      `┌─────────────────────────\n` +
+      `│ 📦 File  : <code>empire.js</code>\n` +
+      `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
+      `└─────────────────────────\n\n` +
+      `⚙️ Sistem sedang mempersiapkan restart...\n` +
+      `♻️ Bot akan kembali online dalam <b>3 detik</b>\n\n` +
+      `<i>Xylent Empire Auto-Update System</i></blockquote>`;
+
+    bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
+    if (chatId && chatId !== CONFIG.OWNER_ID) {
+      bot.sendMessage(chatId, msg, { parse_mode: "HTML" });
+    }
+
+    setTimeout(() => { process.exit(); }, 3000);
 
   } catch (err) {
     console.error("[AutoUpdate] Error:", err.message);
@@ -4520,6 +4463,7 @@ async function checkUpdate(chatId = null) {
   }
 }
 
+// ── AKTIFKAN AUTO-UPDATE ──────────────────────────────────────
 async function startAutoUpdate(chatId) {
   if (autoUpdateEnabled) {
     return bot.sendMessage(chatId,
@@ -4532,10 +4476,17 @@ async function startAutoUpdate(chatId) {
   }
 
   autoUpdateEnabled = true;
+  lastKnownContent  = null; // reset biar ambil baseline fresh
+
+  // Ambil baseline dulu
   await checkUpdate(null);
 
-  const ms        = CONFIG.INTERVAL_MIN * 60 * 1000;
-  checkIntervalID = setInterval(() => checkUpdate(null), ms);
+  // Mulai interval
+  const ms = CONFIG.INTERVAL_MIN * 60 * 1000;
+  checkIntervalID = setInterval(async () => {
+    console.log(`[AutoUpdate] Cek... ${new Date().toLocaleString("id-ID")}`);
+    await checkUpdate(null);
+  }, ms);
 
   bot.sendMessage(chatId,
     `<blockquote>✅ <b>Auto-Update Diaktifkan!</b>\n\n` +
@@ -4555,6 +4506,7 @@ async function startAutoUpdate(chatId) {
   );
 }
 
+// ── MATIKAN AUTO-UPDATE ───────────────────────────────────────
 function stopAutoUpdate(chatId) {
   if (!autoUpdateEnabled) {
     return bot.sendMessage(chatId,
@@ -4567,6 +4519,7 @@ function stopAutoUpdate(chatId) {
   clearInterval(checkIntervalID);
   checkIntervalID   = null;
   autoUpdateEnabled = false;
+  lastKnownContent  = null;
 
   bot.sendMessage(chatId,
     `<blockquote>🔴 <b>Auto-Update Dimatikan!</b>\n\n` +
@@ -4586,6 +4539,7 @@ function stopAutoUpdate(chatId) {
   );
 }
 
+// ── OWNER ONLY ────────────────────────────────────────────────
 function ownerOnly(msg) {
   if (!msg.from || msg.from.id !== CONFIG.OWNER_ID) {
     bot.sendMessage(msg.chat.id,
@@ -4597,6 +4551,7 @@ function ownerOnly(msg) {
   return true;
 }
 
+// ── COMMANDS ──────────────────────────────────────────────────
 bot.onText(/\/autoupdate (on|off)/i, async (msg, match) => {
   if (!ownerOnly(msg)) return;
   const action = match[1].toLowerCase();
