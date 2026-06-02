@@ -4171,16 +4171,9 @@ bot.command("Status", checkOwner, checkAdmin, async (ctx) => {
   }
 });
 
-// ─── CONFIG ────────────────────────────────────────────────────────────────
-
-const path = require("path");
-const fs = require("fs");
-const https = require("https");
-const axios = require("axios");
-
 // ─── IMPORT CONFIG ────────────────────────────────────────────────────────
 const globalConfig = require("./config.js"); 
-const OWNER = globalConfig.OWNER; // Berbentuk Array: ["8768626313"]
+const OWNER = globalConfig.OWNER_IDS; // Berbentuk Array: ["8768626313"]
 
 const CONFIG = {
   RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
@@ -4198,9 +4191,9 @@ function ownerOnly(ctx, next) {
   const senderId = ctx.from?.id?.toString();
 
   // Cek apakah ID pengirim ada di dalam array OWNER
-  const isOwner = Array.isArray(OWNER) 
-    ? OWNER.map(id => id.toString()).includes(senderId)
-    : OWNER.toString() === senderId;
+  const isOwner = Array.isArray(OWNER_IDS) 
+    ? OWNER_IDS.map(id => id.toString()).includes(senderId)
+    : OWNER_IDS.toString() === senderId;
 
   if (!isOwner) {
     ctx.reply(
