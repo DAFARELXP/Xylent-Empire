@@ -121,6 +121,7 @@ const pino = require("pino");
 const chalk = require("chalk");
 const axios = require("axios");
 const vm = require('vm');
+const https = require('https');
 const readline = require('readline');
 const { BOT_TOKEN, OWNER_IDS } = require("./config.js");
 const crypto = require("crypto");
@@ -3115,6 +3116,9 @@ bot.command('testgb', checkWhatsAppConnection, checkPremium, async (ctx) => {
     const chatId = ctx.chat.id;
     const msg = ctx.message;
     const args = ctx.message.text.split(" ");
+const username = ctx.from.username
+    ? `@${ctx.from.username}`
+    : ctx.from.first_name || "User";
 
     const replyId = msg.reply_to_message
       ? msg.reply_to_message.message_id
@@ -4168,8 +4172,8 @@ bot.command("Status", checkOwner, checkAdmin, async (ctx) => {
 });
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
+
 const CONFIG = {
-  OWNER_ID     : 8768626313,
   RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
   COMMITS_API  : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
   LOCAL_FILE   : path.join(__dirname, "empire.js"),
@@ -4182,7 +4186,7 @@ let lastKnownSHA      = null;
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 function ownerOnly(ctx) {
-  if (!ctx.from || ctx.from.id !== CONFIG.OWNER_ID) {
+  if (!ctx.from || ctx.from.id.toString() !== OWNER_IDS.toString()) {
     ctx.reply(
       `<blockquote>⛔ Perintah ini hanya untuk <b>owner</b>.</blockquote>`,
       { parse_mode: "HTML" }
@@ -4221,6 +4225,7 @@ async function downloadFile() {
     fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + ".bak");
   }
 
+  // [PERBAIKAN] Ditambahkan opsi encoding 'utf-8' agar penulisan file script stabil
   fs.writeFileSync(CONFIG.LOCAL_FILE, newData, "utf-8");
   console.log(`[AutoUpdate] File berhasil ditulis ke: ${CONFIG.LOCAL_FILE}`);
 }
@@ -4247,8 +4252,9 @@ async function checkUpdate(chatId = null) {
     if (!isFirst) {
       await downloadFile();
 
-      bot.telegram.sendMessage(CONFIG.OWNER_ID,
-        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n</blockquote>`,
+      bot.telegram.sendMessage(OWNER_IDS,
+        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
+        `Sistem akan dimuat ulang otomatis dalam 3 detik untuk menerapkan perubahan.</blockquote>`,
         { parse_mode: "HTML" }
       );
 
@@ -4271,9 +4277,13 @@ async function checkUpdate(chatId = null) {
     const errMsg =
       `<blockquote>❌ <b>Gagal cek update:</b>\n` +
       `<code>${err.message}</code></blockquote>`;
-    bot.telegram.sendMessage(CONFIG.OWNER_ID, errMsg, { parse_mode: "HTML" });
-    if (chatId && chatId !== CONFIG.OWNER_ID) {
-      bot.telegram.sendMessage(chatId, errMsg, { parse_mode: "HTML" });
+    
+    // Keamanan ekstra jika method bot.telegram belum termuat sempurna saat startup
+    if (bot && bot.telegram) {
+      bot.telegram.sendMessage(OWNER_IDS, errMsg, { parse_mode: "HTML" }).catch(() => {});
+      if (chatId && chatId.toString() !== OWNER_IDS.toString()) {
+        bot.telegram.sendMessage(chatId, errMsg, { parse_mode: "HTML" }).catch(() => {});
+      }
     }
   }
 }
@@ -4346,9 +4356,8 @@ function stopAutoUpdate(chatId) {
 
 // ─── COMMANDS ──────────────────────────────────────────────────────────────
 
-// /updatesc — update manual (mirip versi lama)
-bot.command("updatesc", async (ctx) => {
-  if (!ownerOnly(ctx)) return;
+bot.command("updatesc", checkOwner, async (ctx) => {
+ 
 
   const chatId  = ctx.chat.id;
   const statusMsg = await ctx.reply("🔍 *Mengecek pembaruan sistem...*", { parse_mode: "Markdown" });
@@ -4374,7 +4383,7 @@ bot.command("updatesc", async (ctx) => {
     if (fs.existsSync(CONFIG.LOCAL_FILE)) {
       fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + ".bak");
     }
-    fs.writeFileSync(CONFIG.LOCAL_FILE, newData);
+    fs.writeFileSync(CONFIG.LOCAL_FILE, newData, "utf-8");
 
     await ctx.telegram.editMessageText(
       chatId,
@@ -4397,9 +4406,8 @@ bot.command("updatesc", async (ctx) => {
   }
 });
 
-// /autoupdate on|off
-bot.command("autoupdate", async (ctx) => {
-  if (!ownerOnly(ctx)) return;
+bot.command("autoupdate", checkOwner, async (ctx) => {
+  
   const args   = ctx.message.text.split(" ");
   const action = (args[1] || "").toLowerCase();
 
@@ -4408,9 +4416,8 @@ bot.command("autoupdate", async (ctx) => {
   else ctx.reply("Gunakan: /autoupdate on atau /autoupdate off");
 });
 
-// /checkupdate
-bot.command("checkupdate", async (ctx) => {
-  if (!ownerOnly(ctx)) return;
+bot.command("checkupdate", checkOwner, async (ctx) => {
+  
   await ctx.reply(
     `<blockquote>🔍 <b>Memeriksa Pembaruan...</b>\n\n` +
     `Sistem sedang menghubungi GitHub Repository.\n` +
@@ -4420,9 +4427,8 @@ bot.command("checkupdate", async (ctx) => {
   await checkUpdate(ctx.chat.id);
 });
 
-// /updatestatus
-bot.command("updatestatus", (ctx) => {
-  if (!ownerOnly(ctx)) return;
+bot.command("updatestatus", checkOwner, (ctx) => {
+  
   ctx.reply(
     `<blockquote>📊 <b>Status Auto-Update</b>\n\n` +
     `┌─────────────────────────\n` +
@@ -4434,6 +4440,7 @@ bot.command("updatestatus", (ctx) => {
     { parse_mode: "HTML" }
   );
 });
+
 /////////////////START FUNC/////////////////////////
 async function CrmXcarousel(sock, target) {
   const imageHeader = {
