@@ -461,11 +461,9 @@ const startSesi = async () => {
     printQRInTerminal: false,
     logger: pino({ level: "silent" }),
     auth: state,
-    browser: ['Mac OS', 'Safari', '10.15.7'],
-    getMessage: async (key) => ({
-      conversation: 'Xylent Empire', // Placeholder default
-    }),
-  };
+    browser: ['Mac OS', 'Safari', '10.15.7'] 
+    };
+
 
   sock = makeWASocket(connectionOptions);
   sock.ev.on('creds.update', saveCreds);
@@ -4274,7 +4272,7 @@ async function checkUpdate(chatId = null) {
     await downloadFile();
 
     // Tentukan target chat aman (Gunakan ID pengirim, atau index pertama dari array owner jika otomatis)
-    const targetChat = chatId || (Array.isArray(OWNER) ? OWNER[0] : OWNER);
+    const targetChat = chatId || (Array.isArray(OWNER_IDS) ? OWNER_IDS[0] : OWNER_IDS);
 
     await bot.telegram.sendMessage(targetChat,
       `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
@@ -4291,7 +4289,7 @@ async function checkUpdate(chatId = null) {
       `<code>${err.message}</code></blockquote>`;
     
     if (bot && bot.telegram) {
-      const fallbackChat = Array.isArray(OWNER) ? OWNER[0] : OWNER;
+      const fallbackChat = Array.isArray(OWNER_IDS) ? OWNER_IDS[0] : OWNER_IDS;
       bot.telegram.sendMessage(fallbackChat, errMsg, { parse_mode: "HTML" }).catch(() => {});
     }
   }
