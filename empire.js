@@ -4173,6 +4173,15 @@ bot.command("Status", checkOwner, checkAdmin, async (ctx) => {
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 
+const path = require("path");
+const fs = require("fs");
+const https = require("https");
+const axios = require("axios");
+
+// ─── IMPORT CONFIG ────────────────────────────────────────────────────────
+const globalConfig = require("./config.js"); 
+const OWNER = globalConfig.OWNER; // Berbentuk Array: ["8768626313"]
+
 const CONFIG = {
   RAW_URL      : "https://raw.githubusercontent.com/DAFARELXP/Xylent-Empire/main/empire.js",
   COMMITS_API  : "https://api.github.com/repos/DAFARELXP/Xylent-Empire/commits?path=empire.js&per_page=5",
@@ -4185,15 +4194,22 @@ let checkIntervalID   = null;
 let lastKnownSHA      = null;
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────
-function ownerOnly(ctx) {
-  if (!ctx.from || ctx.from.id.toString() !== OWNER_IDS.toString()) {
+function ownerOnly(ctx, next) {
+  const senderId = ctx.from?.id?.toString();
+
+  // Cek apakah ID pengirim ada di dalam array OWNER
+  const isOwner = Array.isArray(OWNER) 
+    ? OWNER.map(id => id.toString()).includes(senderId)
+    : OWNER.toString() === senderId;
+
+  if (!isOwner) {
     ctx.reply(
       `<blockquote>⛔ Perintah ini hanya untuk <b>owner</b>.</blockquote>`,
       { parse_mode: "HTML" }
     );
-    return false;
+    return; // Stop eksekusi di sini
   }
-  return true;
+  return next(); // Lanjut ke command jika benar owner
 }
 
 function httpGet(url) {
@@ -4225,7 +4241,6 @@ async function downloadFile() {
     fs.copyFileSync(CONFIG.LOCAL_FILE, CONFIG.LOCAL_FILE + ".bak");
   }
 
-  // [PERBAIKAN] Ditambahkan opsi encoding 'utf-8' agar penulisan file script stabil
   fs.writeFileSync(CONFIG.LOCAL_FILE, newData, "utf-8");
   console.log(`[AutoUpdate] File berhasil ditulis ke: ${CONFIG.LOCAL_FILE}`);
 }
@@ -4247,20 +4262,8 @@ async function checkUpdate(chatId = null) {
       return;
     }
 
-    lastKnownSHA = sha;
-
-    if (!isFirst) {
-      await downloadFile();
-
-      bot.telegram.sendMessage(OWNER_IDS,
-        `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
-        `Sistem akan dimuat ulang otomatis dalam 3 detik untuk menerapkan perubahan.</blockquote>`,
-        { parse_mode: "HTML" }
-      );
-
-      setTimeout(() => { process.exit(); }, 3000);
-
-    } else {
+    if (isFirst) {
+      lastKnownSHA = sha;
       console.log(`[AutoUpdate] Terhubung. Sistem siap memantau pembaruan terbaru.`);
       if (chatId) {
         bot.telegram.sendMessage(chatId,
@@ -4270,7 +4273,23 @@ async function checkUpdate(chatId = null) {
           { parse_mode: "HTML" }
         );
       }
+      return;
     }
+
+    // JIKA ADA UPDATE BARU
+    lastKnownSHA = sha;
+    await downloadFile();
+
+    // Tentukan target chat aman (Gunakan ID pengirim, atau index pertama dari array owner jika otomatis)
+    const targetChat = chatId || (Array.isArray(OWNER) ? OWNER[0] : OWNER);
+
+    await bot.telegram.sendMessage(targetChat,
+      `<blockquote>🚀 <b>Auto-Update Berhasil!</b>\n\n` +
+      `Sistem akan dimuat ulang otomatis dalam 3 detik untuk menerapkan perubahan.</blockquote>`,
+      { parse_mode: "HTML" }
+    );
+
+    setTimeout(() => { process.exit(); }, 3000);
 
   } catch (err) {
     console.error("[AutoUpdate] Error:", err.message);
@@ -4278,12 +4297,9 @@ async function checkUpdate(chatId = null) {
       `<blockquote>❌ <b>Gagal cek update:</b>\n` +
       `<code>${err.message}</code></blockquote>`;
     
-    // Keamanan ekstra jika method bot.telegram belum termuat sempurna saat startup
     if (bot && bot.telegram) {
-      bot.telegram.sendMessage(OWNER_IDS, errMsg, { parse_mode: "HTML" }).catch(() => {});
-      if (chatId && chatId.toString() !== OWNER_IDS.toString()) {
-        bot.telegram.sendMessage(chatId, errMsg, { parse_mode: "HTML" }).catch(() => {});
-      }
+      const fallbackChat = Array.isArray(OWNER) ? OWNER[0] : OWNER;
+      bot.telegram.sendMessage(fallbackChat, errMsg, { parse_mode: "HTML" }).catch(() => {});
     }
   }
 }
@@ -4300,10 +4316,11 @@ async function startAutoUpdate(chatId) {
   }
 
   autoUpdateEnabled = true;
-  await checkUpdate(null);
-
+  
   const ms        = CONFIG.INTERVAL_MIN * 60 * 1000;
   checkIntervalID = setInterval(() => checkUpdate(null), ms);
+
+  await checkUpdate(chatId);
 
   bot.telegram.sendMessage(chatId,
     `<blockquote>✅ <b>Auto-Update Diaktifkan!</b>\n\n` +
@@ -4356,9 +4373,7 @@ function stopAutoUpdate(chatId) {
 
 // ─── COMMANDS ──────────────────────────────────────────────────────────────
 
-bot.command("updatesc", checkOwner, async (ctx) => {
- 
-
+bot.command("updatesc", ownerOnly, async (ctx) => {
   const chatId  = ctx.chat.id;
   const statusMsg = await ctx.reply("🔍 *Mengecek pembaruan sistem...*", { parse_mode: "Markdown" });
 
@@ -4397,17 +4412,14 @@ bot.command("updatesc", checkOwner, async (ctx) => {
 
   } catch (e) {
     console.error("Update Error:", e.message);
-
     if (fs.existsSync(CONFIG.LOCAL_FILE + ".bak")) {
       fs.copyFileSync(CONFIG.LOCAL_FILE + ".bak", CONFIG.LOCAL_FILE);
     }
-
     ctx.reply(`❌ *Update Gagal!*\nTerjadi kesalahan: \`${e.message}\``, { parse_mode: "Markdown" });
   }
 });
 
-bot.command("autoupdate", checkOwner, async (ctx) => {
-  
+bot.command("autoupdate", ownerOnly, async (ctx) => {
   const args   = ctx.message.text.split(" ");
   const action = (args[1] || "").toLowerCase();
 
@@ -4416,8 +4428,7 @@ bot.command("autoupdate", checkOwner, async (ctx) => {
   else ctx.reply("Gunakan: /autoupdate on atau /autoupdate off");
 });
 
-bot.command("checkupdate", checkOwner, async (ctx) => {
-  
+bot.command("checkupdate", ownerOnly, async (ctx) => {
   await ctx.reply(
     `<blockquote>🔍 <b>Memeriksa Pembaruan...</b>\n\n` +
     `Sistem sedang menghubungi GitHub Repository.\n` +
@@ -4427,8 +4438,7 @@ bot.command("checkupdate", checkOwner, async (ctx) => {
   await checkUpdate(ctx.chat.id);
 });
 
-bot.command("updatestatus", checkOwner, (ctx) => {
-  
+bot.command("updatestatus", ownerOnly, (ctx) => {
   ctx.reply(
     `<blockquote>📊 <b>Status Auto-Update</b>\n\n` +
     `┌─────────────────────────\n` +
